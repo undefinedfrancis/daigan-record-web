@@ -1,0 +1,1 @@
+{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"darwin","wallTime":1792640926105,"monotonicTime":47185.242,"sdkLanguage":"javascript","title":"upgrade.spec.ts:126 › 首次安装生效且不误报更新；构建 A 断网可用；缓存响应头符合部署要求"}

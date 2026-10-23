@@ -1,0 +1,1 @@
+{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"darwin","wallTime":1792640947029,"monotonicTime":68109.316,"sdkLanguage":"javascript","title":"upgrade.spec.ts:340 › 构建 B 资源下载失败时 A 仍可用（含离线）"}

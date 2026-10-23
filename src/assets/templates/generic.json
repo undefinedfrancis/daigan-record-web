@@ -1,0 +1,143 @@
+{
+  "format": "daigan-template",
+  "formatVersion": 4,
+  "template": {
+    "id": "tpl-generic",
+    "gameName": "通用日常",
+    "templateVersion": "2026.10",
+    "gameVersionNotes": "通用示例模板，可按自己的游戏修改任务与刷新时间。",
+    "timeZone": "Asia/Shanghai",
+    "dailyRefresh": "05:00",
+    "weeklyRefreshDay": "MONDAY",
+    "weeklyRefreshTime": "05:00",
+    "categories": [
+      {
+        "id": "cat-daily",
+        "name": "每日",
+        "hostingMode": null,
+        "targetSessions": null,
+        "serviceWeekdays": null,
+        "tasks": [
+          {
+            "id": "task-signin",
+            "categoryId": "cat-daily",
+            "title": "每日签到",
+            "progressType": "CHECKBOX",
+            "startValue": "0",
+            "targetValue": "1",
+            "unit": null,
+            "recurrence": "DAILY",
+            "weekdays": [],
+            "everyNDays": null,
+            "monthDay": null,
+            "monthDays": [],
+            "activeFrom": null,
+            "activeUntil": null,
+            "numericMode": null
+          },
+          {
+            "id": "task-stamina",
+            "categoryId": "cat-daily",
+            "title": "体力消耗",
+            "progressType": "NUMERIC",
+            "startValue": "0",
+            "targetValue": "180",
+            "unit": "体力",
+            "recurrence": "DAILY",
+            "weekdays": [],
+            "everyNDays": null,
+            "monthDay": null,
+            "monthDays": [],
+            "activeFrom": null,
+            "activeUntil": null,
+            "numericMode": null
+          }
+        ]
+      },
+      {
+        "id": "cat-weekly",
+        "name": "每周",
+        "hostingMode": null,
+        "targetSessions": null,
+        "serviceWeekdays": null,
+        "tasks": [
+          {
+            "id": "task-weekly-boss",
+            "categoryId": "cat-weekly",
+            "title": "周常副本",
+            "progressType": "NUMERIC",
+            "startValue": "0",
+            "targetValue": "3",
+            "unit": "次",
+            "recurrence": "WEEKLY",
+            "weekdays": [],
+            "everyNDays": null,
+            "monthDay": null,
+            "monthDays": [],
+            "activeFrom": null,
+            "activeUntil": null,
+            "numericMode": null
+          }
+        ]
+      },
+      {
+        "id": "cat-monthly",
+        "name": "每月",
+        "hostingMode": null,
+        "targetSessions": null,
+        "serviceWeekdays": null,
+        "tasks": [
+          {
+            "id": "task-monthly-check",
+            "categoryId": "cat-monthly",
+            "title": "月度兑换",
+            "progressType": "CHECKBOX",
+            "startValue": "0",
+            "targetValue": "1",
+            "unit": null,
+            "recurrence": "MONTHLY",
+            "weekdays": [],
+            "everyNDays": null,
+            "monthDay": 1,
+            "monthDays": [
+              1
+            ],
+            "activeFrom": null,
+            "activeUntil": null,
+            "numericMode": null
+          }
+        ]
+      },
+      {
+        "id": "cat-once",
+        "name": "一次性",
+        "hostingMode": null,
+        "targetSessions": null,
+        "serviceWeekdays": null,
+        "tasks": [
+          {
+            "id": "task-once-story",
+            "categoryId": "cat-once",
+            "title": "主线推进",
+            "progressType": "NUMERIC",
+            "startValue": "0",
+            "targetValue": "1",
+            "unit": "章",
+            "recurrence": "ONE_TIME",
+            "weekdays": [],
+            "everyNDays": null,
+            "monthDay": null,
+            "monthDays": [],
+            "activeFrom": null,
+            "activeUntil": null,
+            "numericMode": null
+          }
+        ]
+      }
+    ],
+    "hostingMode": null,
+    "targetSessions": null,
+    "serviceWeekdays": null,
+    "defaultOrderTitle": null
+  }
+}

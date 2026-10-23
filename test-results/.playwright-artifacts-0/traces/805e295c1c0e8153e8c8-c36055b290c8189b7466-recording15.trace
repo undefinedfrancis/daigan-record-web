@@ -1,0 +1,14 @@
+{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"darwin","wallTime":1792640928253,"monotonicTime":49334.094,"sdkLanguage":"javascript","title":"upgrade.spec.ts:191 › 安全页面接受更新：切换到 B 且仅刷新一次"}
+{"type":"before","callId":"bwif@856","startTime":49992.907,"class":"APIRequestContext","method":"fetch","params":{"url":"/__e2e/switch?name=b","method":"POST"}}
+{"type":"log","callId":"bwif@856","time":49998.408,"message":"→ POST http://127.0.0.1:4318/__e2e/switch?name=b"}
+{"type":"log","callId":"bwif@856","time":49998.429,"message":"  user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36"}
+{"type":"log","callId":"bwif@856","time":49998.431,"message":"  accept: */*"}
+{"type":"log","callId":"bwif@856","time":49998.433,"message":"  accept-encoding: gzip,deflate,br"}
+{"type":"log","callId":"bwif@856","time":49999.366,"message":"← 200 OK"}
+{"type":"log","callId":"bwif@856","time":49999.369,"message":"  content-type: application/json; charset=utf-8"}
+{"type":"log","callId":"bwif@856","time":49999.371,"message":"  cache-control: no-store"}
+{"type":"log","callId":"bwif@856","time":49999.372,"message":"  date: Thu, 22 Oct 2026 03:48:48 GMT"}
+{"type":"log","callId":"bwif@856","time":49999.373,"message":"  connection: keep-alive"}
+{"type":"log","callId":"bwif@856","time":49999.374,"message":"  keep-alive: timeout=5"}
+{"type":"log","callId":"bwif@856","time":49999.374,"message":"  transfer-encoding: chunked"}
+{"type":"after","callId":"bwif@856","endTime":49999.411,"result":{"response":{"url":"http://127.0.0.1:4318/__e2e/switch?name=b","status":200,"statusText":"OK","headers":[{"name":"Content-Type","value":"application/json; charset=utf-8"},{"name":"Cache-Control","value":"no-store"},{"name":"Date","value":"Thu, 22 Oct 2026 03:48:48 GMT"},{"name":"Connection","value":"keep-alive"},{"name":"Keep-Alive","value":"timeout=5"},{"name":"Transfer-Encoding","value":"chunked"}],"serverAddr":{"ipAddress":"127.0.0.1","port":4318},"timing":{"startTime":1792640928917,"domainLookupStart":-1,"domainLookupEnd":-1,"connectStart":0,"secureConnectionStart":-1,"connectEnd":0.6610000000000582,"requestStart":0.6610000000000582,"responseStart":1.0829999999987194},"responseEndTiming":1.1299999999973807,"fetchUid":"636f8903ec7e21f3380225920e374949"}}}

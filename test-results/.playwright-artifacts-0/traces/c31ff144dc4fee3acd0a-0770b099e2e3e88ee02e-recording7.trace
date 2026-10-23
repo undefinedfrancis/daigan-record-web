@@ -1,0 +1,17 @@
+{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"darwin","wallTime":1792640925207,"monotonicTime":46287.463,"sdkLanguage":"javascript","title":"app.spec.ts:134 › PWA：manifest 可访问、Service Worker 注册且断网可打开"}
+{"type":"before","callId":"bwif@448","startTime":46710.059,"class":"APIRequestContext","method":"fetch","params":{"url":"/manifest.webmanifest","method":"GET"}}
+{"type":"log","callId":"bwif@448","time":46728.001,"message":"→ GET http://127.0.0.1:4317/manifest.webmanifest"}
+{"type":"log","callId":"bwif@448","time":46728.011,"message":"  user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36"}
+{"type":"log","callId":"bwif@448","time":46728.013,"message":"  accept: */*"}
+{"type":"log","callId":"bwif@448","time":46728.014,"message":"  accept-encoding: gzip,deflate,br"}
+{"type":"log","callId":"bwif@448","time":46754.947,"message":"← 200 OK"}
+{"type":"log","callId":"bwif@448","time":46754.958,"message":"  vary: Origin"}
+{"type":"log","callId":"bwif@448","time":46754.965,"message":"  content-length: 808"}
+{"type":"log","callId":"bwif@448","time":46754.968,"message":"  content-type: application/manifest+json"}
+{"type":"log","callId":"bwif@448","time":46754.97,"message":"  last-modified: Thu, 22 Oct 2026 03:48:22 GMT"}
+{"type":"log","callId":"bwif@448","time":46754.972,"message":"  etag: W/\"808-1792640902234\""}
+{"type":"log","callId":"bwif@448","time":46754.975,"message":"  cache-control: no-cache"}
+{"type":"log","callId":"bwif@448","time":46754.977,"message":"  date: Thu, 22 Oct 2026 03:48:45 GMT"}
+{"type":"log","callId":"bwif@448","time":46754.98,"message":"  connection: keep-alive"}
+{"type":"log","callId":"bwif@448","time":46754.982,"message":"  keep-alive: timeout=5"}
+{"type":"after","callId":"bwif@448","endTime":46755.13,"result":{"response":{"url":"http://127.0.0.1:4317/manifest.webmanifest","status":200,"statusText":"OK","headers":[{"name":"Vary","value":"Origin"},{"name":"Content-Length","value":"808"},{"name":"Content-Type","value":"application/manifest+json"},{"name":"Last-Modified","value":"Thu, 22 Oct 2026 03:48:22 GMT"},{"name":"ETag","value":"W/\"808-1792640902234\""},{"name":"Cache-Control","value":"no-cache"},{"name":"Date","value":"Thu, 22 Oct 2026 03:48:45 GMT"},{"name":"Connection","value":"keep-alive"},{"name":"Keep-Alive","value":"timeout=5"}],"serverAddr":{"ipAddress":"127.0.0.1","port":4317},"timing":{"startTime":1792640925637,"domainLookupStart":-1,"domainLookupEnd":-1,"connectStart":0,"secureConnectionStart":-1,"connectEnd":10.669000000001688,"requestStart":10.669000000001688,"responseStart":24.54899999999907},"responseEndTiming":33.84100000000035,"fetchUid":"a05a8f0232eb1dab11c7c31b99ac3d74"}}}
