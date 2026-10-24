@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { navigate, useRoute } from './Router';
 import { useApp } from './ServiceProvider';
 import {
@@ -215,6 +216,7 @@ export function App() {
           </div>
         </Modal>
       </div>
+      <Analytics />
     </div>
   );
 }
