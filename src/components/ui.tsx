@@ -138,28 +138,51 @@ export function Modal({
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
+  const closeRef = useRef(onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
   useUpdateBlocker(open && Boolean(guardUpdates), 'dirty', DIRTY_MESSAGE);
 
+  // 关闭后焦点回到打开弹窗的元素。必须在渲染阶段记录：子元素的 autoFocus
+  // 早于本组件的 effect 生效，等到 effect 再读 activeElement 只会拿到弹窗内输入框。
+  if (open !== wasOpenRef.current) {
+    wasOpenRef.current = open;
+    if (open) {
+      const active = document.activeElement;
+      previousFocusRef.current = active instanceof HTMLElement ? active : null;
+    }
+  }
+
+  // onClose 常以内联箭头函数传入：只同步 ref，避免它进入下面的 effect 依赖。
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+
+  // 焦点只在打开/关闭时处理。若依赖 onClose 等每次渲染都变化的函数，
+  // 弹窗内受控输入每敲一个字都会重跑「恢复旧焦点 + 聚焦第一个控件」，
+  // 输入框随即失焦，表现为只能输入一个字符。
   useEffect(() => {
     if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
     const node = dialogRef.current;
-    const focusable = node?.querySelector<HTMLElement>(
-      'input, select, textarea, button, [tabindex]:not([tabindex="-1"])',
-    );
+    // 优先聚焦内容区的可输入控件；标题栏关闭按钮只作兜底。
+    const focusable =
+      node?.querySelector<HTMLElement>(
+        'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? node?.querySelector<HTMLElement>('button:not([disabled])');
     focusable?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onClose();
+        closeRef.current();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
-      previous?.focus?.();
+      const target = previousFocusRef.current;
+      if (target?.isConnected) target.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (

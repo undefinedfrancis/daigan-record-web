@@ -131,6 +131,32 @@ test('下单、多张截图上传与老板页账号内订单展示', async ({ pa
   await expect(page.getByText('三月托管')).toBeVisible();
 });
 
+test('弹窗昵称逐键输入不失焦（新建与改昵称）', async ({ page }) => {
+  await page.goto('/');
+  await openOwners(page);
+
+  await page.getByRole('button', { name: '新建老板' }).first().click();
+  const create = page.getByRole('dialog', { name: '新建老板' });
+  const nickname = create.getByLabel('昵称');
+  await expect(nickname).toBeFocused();
+  // 逐键打字：焦点若被弹窗抢走，只会落下第一个字符。
+  await nickname.pressSequentially('花生酱的事', { delay: 30 });
+  await expect(nickname).toHaveValue('花生酱的事');
+  await create.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('花生酱的事').first()).toBeVisible();
+
+  await page.getByText('花生酱的事').first().click();
+  await page.getByRole('button', { name: '改昵称' }).click();
+  const rename = page.getByRole('dialog', { name: '修改老板昵称' });
+  const renameInput = rename.getByLabel('昵称');
+  await expect(renameInput).toBeFocused();
+  await renameInput.fill('');
+  await renameInput.pressSequentially('花生酱', { delay: 30 });
+  await expect(renameInput).toHaveValue('花生酱');
+  await rename.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '花生酱' })).toBeVisible();
+});
+
 test('PWA：manifest 可访问、Service Worker 注册且断网可打开', async ({ page, context }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '今日事项' })).toBeVisible();
