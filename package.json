@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "@zip.js/zip.js": "^2.7.62",
     "dexie": "^4.4.6",
     "react": "^19.3.1",
