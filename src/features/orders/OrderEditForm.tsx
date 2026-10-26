@@ -153,6 +153,12 @@ export function OrderEditForm({
       if (hosting && refreshCycle === 'monthly' && !monthlyRefreshDays) {
         throw new Error('请至少填写一个每月刷新日');
       }
+      if (
+        hosting &&
+        taskGroups.some((group) => group.items.some((item) => item.recurrence === 'ONE_TIME'))
+      ) {
+        throw new Error('托管任务不能使用一次性周期，请改为每日或累计目标 0 → 1');
+      }
       const command: UpdateOrderCommand = {
         orderId: detail.order.id,
         title: title.trim(),
@@ -407,6 +413,7 @@ export function OrderEditForm({
                   <TaskDraftRow
                     key={task.key}
                     task={task}
+                    allowOneTime={!hosting}
                     onChange={(patch) =>
                       updateGroup(
                         group.periodId,

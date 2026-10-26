@@ -18,10 +18,13 @@ export function TaskDraftRow({
   task,
   onChange,
   onRemove,
+  allowOneTime = true,
 }: {
   task: TaskDraftItem;
   onChange: (patch: Partial<TaskDraftItem>) => void;
   onRemove: () => void;
+  /** 托管单不允许"一次性"任务（备份契约禁止）；存量脏数据仍保留可见并提示修改。 */
+  allowOneTime?: boolean;
 }) {
   return (
     <li className="rounded-2xl border border-line/80 bg-white/75 p-3 shadow-[0_1px_0_rgba(48,79,61,0.05)]">
@@ -78,11 +81,18 @@ export function TaskDraftRow({
             });
           }}
         >
-          {Object.entries(RECURRENCE_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
+          {Object.entries(RECURRENCE_LABELS)
+            .filter(([value]) => allowOneTime || value !== 'ONE_TIME')
+            .map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          {!allowOneTime && task.recurrence === 'ONE_TIME' ? (
+            <option value="ONE_TIME" disabled>
+              一次性（托管单不支持，请改）
             </option>
-          ))}
+          ) : null}
         </Select>
         <Button variant="ghost" aria-label="删除任务" onClick={onRemove}>
           <IconTrash size={16} />

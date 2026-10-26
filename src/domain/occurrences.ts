@@ -221,6 +221,103 @@ export function slotFor(
   }
 }
 
+/** 某日所在周期的上一 / 下一每月触发日；没有触发日时返回 null。 */
+function monthTriggerRange(
+  gameDate: string,
+  days: number[],
+): { trigger: string; next: string } | null {
+  const [year, month] = gameDate.split('-').map(Number);
+  let trigger: string | null = null;
+  for (let back = 0; back <= 13 && trigger === null; back += 1) {
+    const base = new Date(Date.UTC(year, month - 1 - back, 1));
+    const dates = monthRefreshDates(base.getUTCFullYear(), base.getUTCMonth() + 1, days);
+    const past = dates.filter((date) => date <= gameDate);
+    if (past.length > 0) trigger = past[past.length - 1];
+  }
+  if (trigger === null) return null;
+  const [triggerYear, triggerMonth] = trigger.split('-').map(Number);
+  let next: string | null = null;
+  for (let forward = 0; forward <= 13 && next === null; forward += 1) {
+    const base = new Date(Date.UTC(triggerYear, triggerMonth - 1 + forward, 1));
+    for (const date of monthRefreshDates(base.getUTCFullYear(), base.getUTCMonth() + 1, days)) {
+      if (date > trigger) {
+        next = date;
+        break;
+      }
+    }
+  }
+  if (next === null) return null;
+  return { trigger, next };
+}
+
+/**
+ * **展示用**覆盖槽（F-01）：某个游戏日"正在生效的本周期任务"。
+ *
+ * 与 `slotFor` 的区别只在 MONTHLY / EVERY_N_DAYS：
+ * - `slotFor` 是**写入口径**：只有触发日才有槽（一个周期只有一天能打卡）；
+ * - `coverageSlotFor` 是**读取口径**：从触发日到下一次触发日前一天，每天都返回同一条槽。
+ *
+ * 返回值刻意保持与触发日一致（`key` / `gameDate` 都是触发日），因此 occurrence 行
+ * 不新增、不迁移、备份契约不变；调用方用 `slot.gameDate !== 当前日` 判断"是否属于本周期
+ * 但当天不是触发日"，写入时仍提交 `slot.gameDate`（或让用户明确补录到该日）。
+ */
+export function coverageSlotFor(
+  task: TaskDefinitionRow,
+  period: HostingPeriodRow,
+  gameDate: string,
+): OccurrenceSlot | null {
+  if (!withinPeriod(period, gameDate)) return null;
+  if (!withinTaskActiveRange(task, gameDate)) return null;
+  if (period.serviceDays != null) {
+    const serviceWeekdays = parseWeekdays(period.serviceWeekdays);
+    if (serviceWeekdays.length > 0 && !serviceWeekdays.includes(isoWeekday(gameDate))) {
+      return null;
+    }
+  }
+  if (period.serviceCount != null) {
+    // 计次托管每天都是完整一轮，无需周期覆盖。
+    return slotFor(task, period, gameDate);
+  }
+  if (task.recurrence !== 'MONTHLY' && task.recurrence !== 'EVERY_N_DAYS') {
+    return slotFor(task, period, gameDate);
+  }
+
+  let trigger: string;
+  let nextTrigger: string | null = null;
+  if (task.recurrence === 'MONTHLY') {
+    const days = parseMonthDays(task.monthDay, task.monthDays);
+    if (days.length === 0) return null;
+    const range = monthTriggerRange(gameDate, days);
+    if (!range) return null;
+    trigger = range.trigger;
+    nextTrigger = range.next;
+  } else {
+    const interval = task.everyNDays ?? 0;
+    if (interval < 1) return null;
+    const offset = diffDays(period.startDate, gameDate);
+    if (offset < 0) return null;
+    trigger = addDays(period.startDate, Math.floor(offset / interval) * interval);
+    nextTrigger = addDays(trigger, interval);
+  }
+
+  // 触发日本身必须可写：早于期次开始日 / 任务生效起始日、晚于截止日的周期不提供展示，
+  // 否则会出现"看得到、点不动"的假任务（写入一律归到触发日）。
+  if (trigger < period.startDate) return null;
+  if (!withinTaskActiveRange(task, trigger)) return null;
+  const rawEnd = nextTrigger !== null ? addDays(nextTrigger, -1) : period.endDate;
+  const rawWindowEnd = task.activeUntil && task.activeUntil < rawEnd ? task.activeUntil : rawEnd;
+  const displayStart = trigger;
+  const displayEnd = rawWindowEnd > period.endDate ? period.endDate : rawWindowEnd;
+  if (displayStart > displayEnd) return null;
+  if (gameDate < displayStart || gameDate > displayEnd) return null;
+  return {
+    key: task.recurrence === 'MONTHLY' ? `M:${trigger}` : `E:${trigger}`,
+    gameDate: trigger,
+    windowStart: displayStart,
+    windowEnd: displayEnd,
+  };
+}
+
 /** 生成指定游戏日期范围内的全部发生槽（用于建单、补录、续期与日历）。 */
 export function slotsInRange(
   task: TaskDefinitionRow,

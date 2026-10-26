@@ -339,6 +339,11 @@ export interface TodayView {
   gameDate: string;
   hosting: TodayTaskItem[];
   shortTasks: TodayTaskItem[];
+  /**
+   * 今天不是触发日、但仍在周期窗口内的任务（每月 / 每 N 天）。
+   * 只用于查看本周期是否已完成与补录，`gameDate` 是触发日，不参与"今日完成"计数与批量完成。
+   */
+  periodic: TodayTaskItem[];
   staleOrders: { orderId: string; title: string; reason: string }[];
 }
 
@@ -454,6 +459,8 @@ export interface PeriodView {
   endDate: string;
   priceCents: number;
   paidCents: number;
+  /** 已录入但到账时间还没到的在途款；不冲抵待收。 */
+  pendingCents: number;
   outstandingCents: number;
   /** UF-010：非 null 表示仅服务日累计模式。 */
   serviceDays: number | null;
@@ -523,6 +530,8 @@ export interface OrderDetailView {
     periodId: string | null;
     createdAt: number;
     operationId: string;
+    /** 有效但到账时间还没到：显示为"待到账"，不计入已收。 */
+    pending: boolean;
   }[];
   corrections: {
     id: string;
@@ -550,6 +559,13 @@ export interface OrderDetailView {
       reachedTarget: boolean;
       /** 该日是否有可更正的归属事件（累计任务）。 */
       eventCount: number;
+      /** 该行的真实归属日：周期任务在非触发日展示时，写入仍落在触发日。 */
+      attributedDate: string;
+      /**
+       * true = 当天不是本任务的触发日，但仍在它的周期窗口内（每月 / 每 N 天的覆盖展示）。
+       * 这类行只用于查看状态与补录，不参与日历格子的完成度着色。
+       */
+      inWindow: boolean;
     }[];
   }[];
   /** 计次托管的轮次（按 sessionIndex 升序）；非计次为空数组。 */
@@ -739,9 +755,13 @@ export interface LedgerView {
   month: string;
   zoneId: string;
   receivedCents: number;
+  /** 全时段在途（到账时间在未来）的有效收款总额；不计入实收、不冲抵待收。 */
+  pendingCents: number;
   outstandingCents: number;
   orderCount: number;
   entries: LedgerViewEntry[];
+  /** 待到账明细（按预计到账时间升序）。 */
+  pending: LedgerViewEntry[];
   outstanding: {
     key: string;
     orderId: string;
@@ -750,6 +770,7 @@ export interface LedgerView {
     ownerName: string;
     priceCents: number;
     paidCents: number;
+    pendingCents: number;
     outstandingCents: number;
   }[];
   monthlyTotals: { month: string; receivedCents: number }[];

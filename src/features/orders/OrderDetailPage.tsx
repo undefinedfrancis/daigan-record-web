@@ -337,7 +337,10 @@ function ReceiptForm({
             ))}
           </Select>
         </Field>
-        <Field label="到账时间">
+        <Field
+          label="到账时间"
+          hint="可填未来时间（如闲鱼担保交易）；到账前只记为“待到账”，不计入实收"
+        >
           <TextInput
             type="datetime-local"
             value={receivedAt}
@@ -407,7 +410,10 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
     const map = new Map<string, string>();
     for (const day of data?.calendar ?? []) {
       for (const task of day.tasks) {
-        if (task.occurrenceId) map.set(task.occurrenceId, day.gameDate);
+        // 周期任务会在窗口内多天出现（同一条 occurrence）：保留最早一天，避免附件日期漂移。
+        if (task.occurrenceId && !map.has(task.occurrenceId)) {
+          map.set(task.occurrenceId, task.attributedDate);
+        }
       }
     }
     return map;
@@ -563,6 +569,13 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
         : (cells.find((date): date is string => date !== null && calendarByDate.has(date)) ?? '');
   const selectedEntries = selectedDayDate ? (calendarByDate.get(selectedDayDate) ?? []) : [];
   const amendEntry = amendTarget ? data.receipts.find((item) => item.id === amendTarget) : null;
+  // 在途款：已录入但到账时间还没到（例如闲鱼担保交易），不冲抵待收。
+  const pendingCents = data.receipts
+    .filter((receipt) => receipt.pending)
+    .reduce((sum, receipt) => sum + receipt.amountCents, 0);
+  const selectedTasks = selectedEntries.flatMap((entry) => entry.tasks);
+  const selectedDueTasks = selectedTasks.filter((task) => !task.inWindow);
+  const selectedWindowTasks = selectedTasks.filter((task) => task.inWindow);
 
   return (
     <div className="flex flex-col gap-3">
@@ -610,6 +623,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
               ) : (
                 '¥0.00'
               )}
+              {pendingCents > 0 ? ` · 待到账 ¥${formatMoney(pendingCents)}` : ''}
             </p>
             {order.deadlineDate ? <p className="muted">交付期限 {order.deadlineDate}</p> : null}
           </div>
@@ -681,6 +695,9 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                   </span>
                   <span className="flex items-center gap-2">
                     <span className="text-ink-soft">¥{formatMoney(period.priceCents)}</span>
+                    {period.pendingCents > 0 ? (
+                      <Badge>待到账 ¥{formatMoney(period.pendingCents)}</Badge>
+                    ) : null}
                     {period.outstandingCents > 0 ? (
                       <Badge tone="warn">待收 ¥{formatMoney(period.outstandingCents)}</Badge>
                     ) : (
@@ -749,6 +766,9 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                   </span>
                 </span>
                 <span className="flex items-center gap-2">
+                  {order.type === 'HOSTING' && task.recurrence === 'ONE_TIME' ? (
+                    <Badge tone="danger">托管不支持一次性，请编辑修改</Badge>
+                  ) : null}
                   {task.cumulative ? <Badge>累计</Badge> : null}
                   {task.progressType === 'NUMERIC' ? (
                     <span className="text-xs text-ink-soft">
@@ -829,8 +849,12 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 {cells.map((date, index) => {
                   if (!date) return <span key={`blank-${index}`} />;
                   const dayEntries = calendarByDate.get(date) ?? [];
-                  const scheduled = dayEntries.length > 0;
-                  const allTasks = dayEntries.flatMap((entry) => entry.tasks);
+                  const everyTask = dayEntries.flatMap((entry) => entry.tasks);
+                  // 格子只按"当天触发"的任务着色：周期覆盖展示（每月 / 每 N 天的其他日子）
+                  // 不参与完成度，否则整月都会变成"待完成/部分完成"。
+                  const allTasks = everyTask.filter((task) => !task.inWindow);
+                  const windowOnly = everyTask.length > 0 && allTasks.length === 0;
+                  const scheduled = allTasks.length > 0;
                   const doneCount = allTasks.filter((task) => task.completed).length;
                   const fullDone = allTasks.length > 0 && doneCount === allTasks.length;
                   const partDone = doneCount > 0 && !fullDone;
@@ -841,7 +865,13 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                         type="button"
                         onClick={() => setSelectedDate(date)}
                         aria-label={`${date}${fullDone ? ' 已完成' : partDone ? ' 部分完成' : ''}`}
-                        title={scheduled ? `${doneCount}/${allTasks.length} 完成` : '无任务'}
+                        title={
+                          scheduled
+                            ? `${doneCount}/${allTasks.length} 完成`
+                            : windowOnly
+                              ? `${everyTask.length} 个本周期任务（当天不是触发日）`
+                              : '无任务'
+                        }
                         className={[
                           'day-cell',
                           !scheduled
@@ -882,10 +912,11 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                       ) : null}
                     </span>
                     <span className="text-xs text-ink-soft">
-                      {selectedEntries
-                        .flatMap((entry) => entry.tasks)
-                        .filter((task) => task.completed).length}
-                      /{selectedEntries.flatMap((entry) => entry.tasks).length} 完成
+                      当日 {selectedDueTasks.filter((task) => task.completed).length}/
+                      {selectedDueTasks.length} 完成
+                      {selectedWindowTasks.length > 0
+                        ? ` · 本周期任务 ${selectedWindowTasks.filter((task) => task.completed).length}/${selectedWindowTasks.length}`
+                        : ''}
                     </span>
                   </div>
                   {selectedEntries.map((entry) => (
@@ -913,17 +944,18 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                             ) : (
                               <button
                                 type="button"
-                                disabled={entry.gameDate > today || order.cancelled}
+                                disabled={task.attributedDate > today || order.cancelled}
                                 onClick={() =>
                                   void run(
                                     () =>
                                       services.tasks.setProgress(
                                         {
                                           taskId: task.taskId,
-                                          gameDate: entry.gameDate,
+                                          // 周期任务在窗口内的其他日子展示：写入一律归到触发日。
+                                          gameDate: task.attributedDate,
                                           value: task.value ?? '1',
                                           completed: !task.completed,
-                                          backfilled: entry.gameDate < today,
+                                          backfilled: task.attributedDate < today,
                                         },
                                         token,
                                       ),
@@ -932,10 +964,21 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                                 }
                                 className={`badge ${
                                   task.completed ? 'border-sage-deep/40 bg-[#eaf3e6]' : 'bg-white'
-                                } ${entry.gameDate > today ? 'opacity-50' : ''}`}
-                                title={task.completed ? '点击取消该次打卡' : '点击完成该次打卡'}
+                                } ${task.inWindow ? 'border-dashed border-sage' : ''} ${
+                                  task.attributedDate > today ? 'opacity-50' : ''
+                                }`}
+                                title={
+                                  task.inWindow
+                                    ? `本周期任务，归属 ${task.attributedDate}；${
+                                        task.completed ? '点击取消该次打卡' : '点击补录到该日'
+                                      }`
+                                    : task.completed
+                                      ? '点击取消该次打卡'
+                                      : '点击完成该次打卡'
+                                }
                               >
                                 {task.completed ? '✓ ' : ''}
+                                {task.inWindow ? `本周期 ${task.attributedDate.slice(5)} · ` : ''}
                                 {task.title}
                                 {task.backfilled ? '（补录）' : ''}
                               </button>
@@ -997,11 +1040,38 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                   <span className="ml-2">
                     {receipt.status === 'VOIDED' ? <Badge tone="danger">已作废</Badge> : null}
                     {receipt.status === 'REPLACED' ? <Badge>已更正</Badge> : null}
-                    {receipt.status === 'ACTIVE' ? <Badge>有效</Badge> : null}
+                    {receipt.status === 'ACTIVE' ? (
+                      receipt.pending ? <Badge tone="warn">待到账</Badge> : <Badge>有效</Badge>
+                    ) : null}
                   </span>
                 </span>
                 {receipt.status === 'ACTIVE' && !order.cancelled ? (
                   <span className="flex gap-1">
+                    {receipt.pending ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          void run(
+                            () =>
+                              services.receipts.amend(
+                                {
+                                  operationId: `confirm-${receipt.id}-${Date.now()}`,
+                                  receiptId: receipt.id,
+                                  amountCents: receipt.amountCents,
+                                  receivedAt: Date.now(),
+                                  channel: receipt.channel,
+                                  note: receipt.note,
+                                  reason: '确认到账',
+                                },
+                                token,
+                              ),
+                            '已确认到账',
+                          ).catch(() => undefined)
+                        }
+                      >
+                        确认到账
+                      </Button>
+                    ) : null}
                     <Button variant="ghost" onClick={() => setAmendTarget(receipt.id)}>
                       更正
                     </Button>

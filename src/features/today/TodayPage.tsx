@@ -310,6 +310,26 @@ export function TodayPage() {
       ),
     [today.data, colorFilter],
   );
+  const periodicGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      { orderId: string; orderTitle: string; gameDate: string; items: TodayTaskItem[] }
+    >();
+    for (const item of (today.data?.periodic ?? []).filter(
+      (entry) => !colorFilter || entry.colorTag === colorFilter,
+    )) {
+      const key = `${item.orderId}:${item.gameDate}`;
+      const group = map.get(key) ?? {
+        orderId: item.orderId,
+        orderTitle: item.orderTitle,
+        gameDate: item.gameDate,
+        items: [],
+      };
+      group.items.push(item);
+      map.set(key, group);
+    }
+    return [...map.values()];
+  }, [today.data, colorFilter]);
   const shortGroups = useMemo(
     () =>
       groupByOrder(
@@ -345,14 +365,16 @@ export function TodayPage() {
       return;
     }
     const completed = !item.completed;
+    // 归属日必须取任务自己的（计次轮次 / 周期触发日可能不同于页面游戏日）。
+    const gameDate = item.gameDate || (today.data?.gameDate ?? '');
     await run(() =>
       services.tasks.setProgress(
         {
           taskId: item.taskId,
-          gameDate: today.data?.gameDate ?? '',
+          gameDate,
           value: item.progressType === 'CHECKBOX' ? (completed ? '1' : null) : item.currentValue,
           completed,
-          backfilled: false,
+          backfilled: gameDate < (today.data?.gameDate ?? ''),
         },
         token,
       ),
@@ -413,14 +435,15 @@ export function TodayPage() {
       await submitCumulative(item, value);
       return;
     }
+    const gameDate = item.gameDate || (today.data?.gameDate ?? '');
     await run(() =>
       services.tasks.setProgress(
         {
           taskId: item.taskId,
-          gameDate: today.data?.gameDate ?? '',
+          gameDate,
           value,
           completed: true,
-          backfilled: false,
+          backfilled: gameDate < (today.data?.gameDate ?? ''),
         },
         token,
       ),
@@ -705,6 +728,47 @@ export function TodayPage() {
           )}
         </Card>
       </div>
+
+      {periodicGroups.length > 0 ? (
+        <Card>
+          <div className="section-title">
+            <h2>本周期任务</h2>
+            <span className="muted">今天不是触发日 · 勾选会补录到周期起点</span>
+          </div>
+          <div className="flex flex-col gap-3">
+            {periodicGroups.map((group) => (
+              <div
+                key={`${group.orderId}:${group.gameDate}`}
+                className="rounded-2xl border border-dashed border-line bg-white/40 px-3 py-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+                  <button
+                    type="button"
+                    className="min-w-0 max-w-full truncate text-left text-sm font-semibold"
+                    title={group.orderTitle}
+                    onClick={() => navigate(`/orders/${group.orderId}`)}
+                  >
+                    {group.orderTitle}
+                  </button>
+                  <span className="text-xs text-ink-soft">本周期归属 {group.gameDate}</span>
+                </div>
+                <ul>
+                  {group.items.map((item) => (
+                    <TaskRow
+                      key={item.occurrenceId ?? item.taskId}
+                      item={item}
+                      onToggle={() => toggle(item)}
+                      onColor={(color) => setTaskColor(item, color)}
+                      onSaveValue={(value) => saveValue(item, value)}
+                      onUpload={(files) => upload(item, files)}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
     </div>
   );
 }

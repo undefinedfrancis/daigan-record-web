@@ -10,7 +10,13 @@ import type {
   TaskOccurrenceRow,
   TaskProgressEventRow,
 } from '../contracts/tables';
-import { activeReceipts, paidForOrder, paidForPeriod, receivablesOf } from '../domain/ledger';
+import {
+  paidForOrder,
+  paidForPeriod,
+  pendingReceipts,
+  receivablesOf,
+  settledReceipts,
+} from '../domain/ledger';
 import { argbToColourToken } from '../backup/normalize/localColours';
 import { legacyModeFromServiceDefaults } from '../backup/normalize/categoryDefaults';
 import { countServiceDaysUsed, gameDateAt, monthRange } from '../domain/gameCalendar';
@@ -27,7 +33,7 @@ import {
 } from '../domain/cumulativeScope';
 import { isCumulativeTask } from '../domain/derivedState';
 import { calendarGameDate, scopeCalendar, type ScopeCalendar } from '../domain/scopeCalendar';
-import { parseWeekdays, slotFor } from '../domain/occurrences';
+import { coverageSlotFor, parseWeekdays, slotFor } from '../domain/occurrences';
 import {
   hasObservationInScope,
   reachedTarget,
@@ -117,16 +123,18 @@ function summaryOf(
   data: BackupDataSet,
   order: OrderRow,
   orderColorMarks: Map<string, string | null> = new Map(),
+  nowMs: number = Date.now(),
 ): OrderSummary {
   const { owner, account } = namesOf(data, order);
   const periods = data.hosting_periods.filter((period) => period.orderId === order.id);
   const latest = periods.sort((left, right) => right.periodIndex - left.periodIndex)[0];
   const price = order.type === 'SHORT_TASK' ? (order.priceCents ?? 0) : (latest?.priceCents ?? 0);
+  // 只把已经到账的收款算作已收：未来到账的在途款不冲抵待收。
   const paid =
     order.type === 'SHORT_TASK'
-      ? paidForOrder(data, order.id)
+      ? paidForOrder(data, order.id, nowMs)
       : latest
-        ? paidForPeriod(data, latest.id)
+        ? paidForPeriod(data, latest.id, nowMs)
         : 0;
   const outstanding = Math.max(0, price - paid);
   return {
@@ -157,6 +165,7 @@ function accountSummary(
   data: BackupDataSet,
   account: GameAccountRow,
   orderColorMarks: Map<string, string | null> = new Map(),
+  nowMs: number = Date.now(),
 ): AccountSummary {
   const category = account.categoryId
     ? data.account_categories.find((row) => row.id === account.categoryId)
@@ -178,7 +187,7 @@ function accountSummary(
     categoryName: category?.name ?? null,
     orders: data.orders
       .filter((order) => order.accountId === account.id)
-      .map((order) => summaryOf(data, order, orderColorMarks)),
+      .map((order) => summaryOf(data, order, orderColorMarks, nowMs)),
   };
 }
 
@@ -316,6 +325,8 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
         const data = ctx.data;
         const hosting: TodayTaskItem[] = [];
         const shortTasks: TodayTaskItem[] = [];
+        /** 今天不触发、但仍在周期窗口内的任务（只读展示 + 可补录到触发日）。 */
+        const periodic: TodayTaskItem[] = [];
         const staleOrders: TodayView['staleOrders'] = [];
         const includeExpired = filter.includeExpired === true;
         // 任务颜色 = 自身 colorArgb ?? 订单色（继承），不再有独立的"跟随标记"表。
@@ -578,7 +589,52 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             const cumulative = isCumulativeTask(task);
             // 累计目标不受原重复触发日限制（UF-038）：达标前每天都可以更新。
             const slot = cumulative ? null : slotFor(task, period, today);
-            if (!cumulative && !slot) continue;
+            if (!cumulative && !slot) {
+              // F-01：今天不是触发日，但本周期已开始（每月 / 每 N 天）→ 进"本周期任务"，
+              // 让用户第二天仍能看到这个周期到底做完没有；写入仍归到触发日。
+              const windowSlot = coverageSlotFor(task, period, today);
+              if (windowSlot && windowSlot.gameDate !== today) {
+                const occurrence =
+                  occurrences.find(
+                    (row) =>
+                      row.taskDefinitionId === task.id &&
+                      row.occurrenceKey === windowSlot.key,
+                  ) ?? null;
+                periodic.push({
+                  ...base,
+                  taskId: task.id,
+                  colorTag: colorMarks.get(task.id) ?? null,
+                  periodId: period.id,
+                  occurrenceId: occurrence?.id ?? null,
+                  occurrenceKey: windowSlot.key,
+                  title: task.title,
+                  progressType: task.progressType,
+                  currentValue: occurrence?.value ?? task.currentValue,
+                  targetValue: task.targetValue,
+                  unit: task.unit,
+                  completed: Boolean(occurrence?.completedAt),
+                  backfilled: occurrence?.backfilled === 1,
+                  windowStart: windowSlot.windowStart,
+                  windowEnd: windowSlot.windowEnd,
+                  attachmentCount: occurrence
+                    ? (attachmentByOccurrence.get(occurrence.id) ?? 0)
+                    : (attachmentByTask.get(task.id) ?? 0),
+                  batchId: occurrence?.completionBatchId ?? null,
+                  serviceCount: null,
+                  serviceRounds: 0,
+                  numericMode: task.numericMode,
+                  cumulative: false,
+                  reachedTarget: Boolean(occurrence?.completedAt),
+                  sessionId: null,
+                  sessionIndex: null,
+                  awaitingSession: false,
+                  roundDate: windowSlot.gameDate,
+                  gameDate: windowSlot.gameDate,
+                  calendar,
+                });
+              }
+              continue;
+            }
             // 期次快照下的归属日不在服务窗口内时不列出：命令层也会拒绝，不要显示一个
             // 永远写不进去的"今天"。
             if (cumulative && (periodToday < period.startDate || periodToday > period.endDate)) {
@@ -640,6 +696,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           gameDate: gameDateAt(now(), zoneId, refresh),
           hosting,
           shortTasks,
+          periodic,
           staleOrders,
         };
       });
@@ -727,7 +784,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
         const orders = data.orders
           .filter((order) => accounts.some((account) => account.id === order.accountId))
           .sort((left, right) => right.createdAt - left.createdAt)
-          .map((order) => summaryOf(data, order, orderColorMarks));
+          .map((order) => summaryOf(data, order, orderColorMarks, now()));
         return {
           owner: {
             id: owner.id,
@@ -738,9 +795,11 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             activeOrderCount: orders.filter((order) => !order.cancelled && !order.completed).length,
             outstandingCents: orders.reduce((sum, order) => sum + order.outstandingCents, 0),
           },
-          accounts: activeAccounts.map((account) => accountSummary(data, account, orderColorMarks)),
+          accounts: activeAccounts.map((account) =>
+            accountSummary(data, account, orderColorMarks, now()),
+          ),
           archivedAccounts: archivedAccounts.map((account) =>
-            accountSummary(data, account, orderColorMarks),
+            accountSummary(data, account, orderColorMarks, now()),
           ),
           orders,
           templates: data.game_templates
@@ -780,7 +839,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             return true;
           })
           .sort((left, right) => right.createdAt - left.createdAt)
-          .map((order) => summaryOf(data, order, orderColorMarks));
+          .map((order) => summaryOf(data, order, orderColorMarks, now()));
       });
     },
 
@@ -792,12 +851,15 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
       return runtime.read((ctx) => {
         const data = ctx.data;
         const { start, end } = monthRange(report.month, report.zoneId);
-        const active = activeReceipts(data);
+        const nowMs = now();
+        // 只有已经到账的收款算实收；未来到账的进"待到账"，不冲抵待收。
+        const active = settledReceipts(data, nowMs);
+        const pending = pendingReceipts(data, nowMs);
         const inMonth = active
           .filter((receipt) => receipt.receivedAt >= start && receipt.receivedAt < end)
           .sort((left, right) => right.receivedAt - left.receivedAt);
 
-        const entries = inMonth.map((receipt) => {
+        function entryOf(receipt: (typeof data.receipts)[number]) {
           const order = data.orders.find((row) => row.id === receipt.orderId);
           const { owner } = order ? namesOf(data, order) : { owner: undefined };
           return {
@@ -813,9 +875,14 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             status: receipt.status,
             createdAt: receipt.createdAt,
           };
-        });
+        }
 
-        const receivables = receivablesOf(data).filter((item) => item.outstandingCents > 0);
+        const entries = inMonth.map(entryOf);
+        const pendingEntries = [...pending]
+          .sort((left, right) => left.receivedAt - right.receivedAt)
+          .map(entryOf);
+
+        const receivables = receivablesOf(data, nowMs).filter((item) => item.outstandingCents > 0);
         const monthlyTotals: LedgerView['monthlyTotals'] = [];
         const base = new Date(`${report.month}-01T00:00:00Z`);
         for (let offset = 5; offset >= 0; offset -= 1) {
@@ -838,11 +905,13 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           month: report.month,
           zoneId: report.zoneId,
           receivedCents: inMonth.reduce((sum, receipt) => sum + receipt.amountCents, 0),
+          pendingCents: pending.reduce((sum, receipt) => sum + receipt.amountCents, 0),
           outstandingCents: receivables.reduce((sum, item) => sum + item.outstandingCents, 0),
           orderCount: data.orders.filter(
             (order) => order.createdAt >= start && order.createdAt < end,
           ).length,
           entries,
+          pending: pendingEntries,
           outstanding: receivables.map((item) => ({
             key: item.key,
             orderId: item.orderId,
@@ -851,6 +920,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             ownerName: item.ownerName,
             priceCents: item.priceCents,
             paidCents: item.paidCents,
+            pendingCents: item.pendingCents,
             outstandingCents: item.outstandingCents,
           })),
           monthlyTotals,
@@ -1048,7 +1118,7 @@ async function orderDetailOf(
       : { kind: 'NOT_COUNT_BASED' };
 
   const periodViews: PeriodView[] = periods.map((period) => {
-    const paid = paidForPeriod(data, period.id);
+    const paid = paidForPeriod(data, period.id, nowMs);
     // UF-010：计划口径已用/剩余服务天数（非服务日不计）。
     const serviceDays = period.serviceDays ?? null;
     const used =
@@ -1068,6 +1138,9 @@ async function orderDetailOf(
       endDate: period.endDate,
       priceCents: period.priceCents,
       paidCents: paid,
+      pendingCents: pendingReceipts(data, nowMs)
+        .filter((receipt) => receipt.periodId === period.id)
+        .reduce((sum, receipt) => sum + receipt.amountCents, 0),
       outstandingCents: Math.max(0, period.priceCents - paid),
       serviceDays,
       serviceWeekdays: period.serviceWeekdays,
@@ -1241,13 +1314,13 @@ async function orderDetailOf(
     });
 
   return {
-    order: summaryOf(data, order, orderColorMarks),
+    order: summaryOf(data, order, orderColorMarks, nowMs),
     notes: order.notes,
     paymentMode: order.paymentMode,
     weeklyRefreshDay: order.weeklyRefreshDay,
     weeklyRefreshMinutes: order.weeklyRefreshMinutes,
     monthlyRefreshDays: order.monthlyRefreshDays,
-    account: account ? accountSummary(data, account, orderColorMarks) : null,
+    account: account ? accountSummary(data, account, orderColorMarks, nowMs) : null,
     periods: periodViews,
     tasks: taskViews,
     receipts: data.receipts
@@ -1263,6 +1336,7 @@ async function orderDetailOf(
         periodId: receipt.periodId,
         createdAt: receipt.createdAt,
         operationId: receipt.operationId,
+        pending: receipt.status === 'ACTIVE' && receipt.receivedAt > nowMs,
       })),
     corrections: data.receipt_corrections
       .filter((correction) =>
@@ -1354,6 +1428,8 @@ function buildCalendar(input: {
               cumulative: Boolean(task && isCumulativeTask(task)),
               reachedTarget: state.reachedTarget,
               eventCount: eventCountByTask.get(state.taskId) ?? 0,
+              attributedDate: progress.attributedDate ?? today,
+              inWindow: false,
             };
           }),
         },
@@ -1392,10 +1468,14 @@ function buildCalendar(input: {
               eventCount: events.filter(
                 (event) => event.taskDefinitionId === task.id && event.gameDate === cursor,
               ).length,
+              attributedDate: cursor,
+              inWindow: false,
             },
           ];
         }
-        const slot = slotFor(task, period, cursor);
+        // 读取用覆盖槽：每月 / 每 N 天任务在其周期窗口内每天都能看到状态，
+        // 但 occurrence 仍只有触发日那一条（key / gameDate 都是触发日）。
+        const slot = coverageSlotFor(task, period, cursor);
         if (!slot) return [];
         const occurrence = occurrences.find(
           (row) => row.taskDefinitionId === task.id && row.occurrenceKey === slot.key,
@@ -1414,6 +1494,9 @@ function buildCalendar(input: {
             cumulative: false,
             reachedTarget: Boolean(occurrence?.completedAt),
             eventCount: 0,
+            attributedDate: slot.gameDate,
+            // 每周任务本来就整窗展示（历史行为），不标记为"窗口覆盖"，避免改变既有格子口径。
+            inWindow: task.recurrence !== 'WEEKLY' && slot.gameDate !== cursor,
           },
         ];
       });

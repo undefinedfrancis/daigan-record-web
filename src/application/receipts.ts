@@ -27,6 +27,22 @@ function validateChannel(channel: ReceiptChannel, note: string | null): void {
   }
 }
 
+/** 预填到账时间最多一年，避免误输入把在途款推到很远的月份。 */
+export const RECEIPT_FUTURE_LIMIT_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * 到账时间允许在未来（闲鱼等担保交易要等确认收货才到账），
+ * 但在到达前不计入实收、也不冲抵待收（见 `domain/ledger`）。
+ */
+export function assertReceivedAt(receivedAt: number, nowMs: number): void {
+  if (!Number.isFinite(receivedAt) || receivedAt <= 0) {
+    throw new AppError('INVALID_INPUT', '到账时间不合法');
+  }
+  if (receivedAt > nowMs + RECEIPT_FUTURE_LIMIT_MS) {
+    throw new AppError('INVALID_INPUT', '到账时间最多只能预填一年以内');
+  }
+}
+
 function paidExcluding(
   ctx: WriteContext,
   predicate: (receipt: ReceiptRow) => boolean,
@@ -46,9 +62,7 @@ export function createReceiptServices({ runtime, newId, now }: ReceiptDeps) {
       validateAmount(input.amountCents);
       const note = input.channel === 'OTHER' ? optionalText(input.note, 200, '备注') : null;
       validateChannel(input.channel, note);
-      if (input.receivedAt > now()) {
-        throw new AppError('INVALID_INPUT', '到账时间不能晚于当前时间');
-      }
+      assertReceivedAt(input.receivedAt, now());
 
       return runtime.write(token, async (ctx) => {
         const duplicate = ctx.data.receipts.find(
@@ -125,9 +139,7 @@ export function createReceiptServices({ runtime, newId, now }: ReceiptDeps) {
       const note = input.channel === 'OTHER' ? optionalText(input.note, 200, '备注') : null;
       validateChannel(input.channel, note);
       const reason = optionalText(input.reason, 200, '更正原因');
-      if (input.receivedAt > now()) {
-        throw new AppError('INVALID_INPUT', '到账时间不能晚于当前时间');
-      }
+      assertReceivedAt(input.receivedAt, now());
 
       return runtime.write(token, async (ctx) => {
         const existing = ctx.data.receipt_corrections.find(

@@ -214,6 +214,9 @@ export function OrderEditor({
       if (type === 'HOSTING' && serviceMode === 'weekdays' && serviceWeekdays.length === 0) {
         throw new Error('请至少选择一个服务星期');
       }
+      if (type === 'HOSTING' && tasks.some((task) => task.recurrence === 'ONE_TIME')) {
+        throw new Error('托管任务不能使用一次性周期，请改为每日或累计目标 0 → 1');
+      }
       const priceCents = type === 'SHORT_TASK' ? parseMoney(shortPrice) : null;
       const periodPriceCents = type === 'HOSTING' ? parseMoney(periodPrice) : null;
       let firstReceipt = null;
@@ -630,6 +633,7 @@ export function OrderEditor({
             <TaskDraftRow
               key={task.key}
               task={task}
+              allowOneTime={type !== 'HOSTING'}
               onChange={(patch) => updateTask(task.key, patch)}
               onRemove={() => {
                 markDirty();
@@ -736,7 +740,10 @@ export function OrderEditor({
                 <option value="OTHER">其他</option>
               </Select>
             </Field>
-            <Field label="到账时间">
+            <Field
+              label="到账时间"
+              hint="可填未来时间（如闲鱼担保交易）；到账前记为“待到账”，不计入实收"
+            >
               <TextInput
                 type="datetime-local"
                 value={receiptAt}

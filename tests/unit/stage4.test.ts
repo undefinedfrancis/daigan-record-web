@@ -1811,11 +1811,35 @@ describe('R3 历史补记的应做集与稳定归属日', () => {
         checkbox('签到'),
         { ...checkbox('迟到的任务'), activeFrom: DAY2 },
         { ...checkbox('提前结束的任务'), activeUntil: DAY0 },
-        { ...checkbox('一次性任务'), recurrence: 'ONE_TIME' },
-        { ...cumulative('抽卡'), numericMode: null, unit: null, recurrence: 'ONE_TIME' },
       ],
       2,
     );
+    // 命令层现在拒绝在托管单写入一次性任务（F-00）。这里直接写库模拟历史脏数据，
+    // 验证读取/应做集仍能安全容错，而不是依赖非法建单路径。
+    await env.runtime.write(env.token, async (ctx) => {
+      const base = ctx.data.task_definitions.find((task) => task.title === '签到')!;
+      await ctx.table('task_definitions').add({
+        ...base,
+        id: newId(),
+        title: '一次性任务',
+        recurrence: 'ONE_TIME',
+        completedAt: null,
+        currentValue: '0',
+      });
+      await ctx.table('task_definitions').add({
+        ...base,
+        id: newId(),
+        title: '抽卡',
+        progressType: 'NUMERIC',
+        startValue: '0',
+        targetValue: '100',
+        unit: null,
+        numericMode: null,
+        recurrence: 'ONE_TIME',
+        completedAt: null,
+        currentValue: '0',
+      });
+    });
     const detail = (await env.services.queries.orderDetail(orderId))!;
     const check = detail.tasks.find((task) => task.title === '签到')!;
     await env.services.tasks.setProgress(

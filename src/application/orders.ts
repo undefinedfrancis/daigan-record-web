@@ -29,6 +29,7 @@ import type {
   UpdateOrderTaskItem,
 } from './contracts';
 import { fingerprintOf } from './fingerprint';
+import { assertReceivedAt } from './receipts';
 import {
   assertOrderWritable,
   assertWritableAccount,
@@ -107,6 +108,21 @@ function validateTasks(tasks: TemplateTaskDraft[]): void {
       throw new AppError('INVALID_INPUT', '任务生效截止日不能早于生效起始日');
     }
   });
+}
+
+/**
+ * 托管任务不允许"一次性"周期：它不产生任何打卡槽（`slotFor` 恒为 null），
+ * 备份契约也明确拒绝（`validateSnapshot` "托管任务不得使用一次性周期"）。
+ * 必须在写入时拒绝，否则用户会得到一个永远不能打卡、且无法恢复的任务。
+ */
+function assertHostingRecurrences(tasks: TemplateTaskDraft[]): void {
+  const oneTime = tasks.find((task) => task.recurrence === 'ONE_TIME');
+  if (oneTime) {
+    throw new AppError(
+      'INVALID_INPUT',
+      `托管任务「${oneTime.title}」不能使用一次性周期，请改为每日；只做一次可改用累计目标 0 → 1`,
+    );
+  }
 }
 
 /** 任务草稿 → 定义行字段（建单与全量修改共用同一套归一化规则）。 */
@@ -383,6 +399,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
       if (!isValidZone(zoneId)) throw new AppError('INVALID_INPUT', '游戏时区不合法');
       assertRefresh(input.dailyRefreshMinutes, input.weeklyRefreshDay, input.weeklyRefreshMinutes);
       validateTasks(input.tasks);
+      if (input.type === 'HOSTING') assertHostingRecurrences(input.tasks);
 
       let priceCents: number | null = null;
       let hostingEndDate: string | null = null;
@@ -561,9 +578,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           if (receipt.channel !== 'OTHER' && receipt.note) {
             throw new AppError('INVALID_INPUT', '只有“其他”渠道可以填写备注');
           }
-          if (receipt.receivedAt > now()) {
-            throw new AppError('INVALID_INPUT', '到账时间不能晚于当前时间');
-          }
+          assertReceivedAt(receipt.receivedAt, now());
           receiptId = newId();
           await ctx.table('receipts').add({
             id: receiptId,
@@ -843,7 +858,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           throw new AppError('ORDER_CANCELLED', '订单已作废，不能修改价格');
         }
         if (order.type === 'SHORT_TASK') {
-          const paid = paidForOrder(ctx.data, order.id);
+          const paid = paidForOrder(ctx.data, order.id, now());
           if (input.priceCents < paid) {
             throw new AppError(
               'AMOUNT_EXCEEDS_BALANCE',
@@ -873,7 +888,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           (row) => row.id === input.periodId && row.orderId === order.id,
         );
         if (!period) throw new AppError('NOT_FOUND', '期次不属于该订单');
-        const paid = paidForPeriod(ctx.data, period.id);
+        const paid = paidForPeriod(ctx.data, period.id, now());
         if (input.priceCents < paid) {
           throw new AppError(
             'AMOUNT_EXCEEDS_BALANCE',
@@ -940,6 +955,13 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
             if (!item.periodId || !periodIds.has(item.periodId)) {
               throw new AppError('INVALID_INPUT', '托管任务必须挂有效期次');
             }
+            // 存量脏数据（历史版本允许写入）在这里必须改掉才能保存，避免继续产出不可恢复数据。
+            if (item.task.recurrence === 'ONE_TIME') {
+              throw new AppError(
+                'INVALID_INPUT',
+                `托管任务「${item.task.title}」不能使用一次性周期，请改为每日；只做一次可改用累计目标 0 → 1`,
+              );
+            }
           } else if (item.periodId !== null) {
             throw new AppError('INVALID_INPUT', '短期单任务不能挂期次');
           }
@@ -960,7 +982,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
 
         // 短期单价格不得低于已收
         if (order.type === 'SHORT_TASK' && priceCents !== null) {
-          const paid = paidForOrder(ctx.data, order.id);
+          const paid = paidForOrder(ctx.data, order.id, now());
           if (priceCents < paid) {
             throw new AppError(
               'AMOUNT_EXCEEDS_BALANCE',
@@ -1013,7 +1035,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
             throw new AppError('INVALID_INPUT', '开始日期不能晚于结束日期');
           }
           const periodPriceCents = assertMoney(item.priceCents, '期次价格');
-          const paid = paidForPeriod(ctx.data, period.id);
+          const paid = paidForPeriod(ctx.data, period.id, now());
           if (periodPriceCents < paid) {
             throw new AppError(
               'AMOUNT_EXCEEDS_BALANCE',

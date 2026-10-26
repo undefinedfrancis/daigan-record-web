@@ -35,7 +35,9 @@ export function LedgerPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">收款与统计</h1>
-          <p className="muted">实收按到账时间归属月份；欠款为全时段未收金额</p>
+          <p className="muted">
+            实收按到账时间归属月份；待到账不冲抵欠款，到账后自动生效
+          </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <Field label="月份">
@@ -58,10 +60,15 @@ export function LedgerPage() {
 
       <ErrorText message={ledger.error} />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <p className="muted">本月实收</p>
           <p className="num">¥{formatMoney(data?.receivedCents ?? 0)}</p>
+        </Card>
+        <Card>
+          <p className="muted">待到账</p>
+          <p className="num">¥{formatMoney(data?.pendingCents ?? 0)}</p>
+          <p className="mt-1 text-xs text-ink-soft">已录入但到账时间在未来</p>
         </Card>
         <Card>
           <p className="muted">全部待收</p>
@@ -113,6 +120,7 @@ export function LedgerPage() {
                   <span className="block text-xs text-ink-soft">
                     {item.ownerName} · 应收 ¥{formatMoney(item.priceCents)} · 已收 ¥
                     {formatMoney(item.paidCents)}
+                    {item.pendingCents > 0 ? ` · 待到账 ¥${formatMoney(item.pendingCents)}` : ''}
                   </span>
                 </span>
                 <span className="flex items-center gap-2">
@@ -121,6 +129,42 @@ export function LedgerPage() {
                     去收款
                   </Button>
                 </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card>
+        <div className="section-title">
+          <h2>待到账</h2>
+          <span className="muted">{data?.pending.length ?? 0} 笔</span>
+        </div>
+        {data && data.pending.length === 0 ? (
+          <EmptyState
+            title="没有待到账的收款"
+            description="录入未来到账时间（如闲鱼担保交易）后，在到账前会列在这里，不冲抵待收。"
+          />
+        ) : (
+          <ul className="divide-y divide-line">
+            {(data?.pending ?? []).map((entry) => (
+              <li
+                key={entry.receiptId}
+                className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+              >
+                <span>
+                  <span className="font-medium">¥{formatMoney(entry.amountCents)}</span>
+                  <span className="ml-2 text-xs text-ink-soft">
+                    {CHANNEL_LABELS[entry.channel]} · 预计 {new Date(entry.receivedAt).toLocaleString('zh-CN')}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="text-xs text-ink-soft underline"
+                  onClick={() => navigate(`/orders/${entry.orderId}`)}
+                >
+                  {entry.orderTitle} · {entry.ownerName}
+                </button>
               </li>
             ))}
           </ul>
