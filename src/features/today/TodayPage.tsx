@@ -218,15 +218,25 @@ function OrderGroup({
           >
             {group.title}
           </button>
+          {/* 老板标识放大：一眼能分清是哪位老板的单。 */}
           {first ? (
             <span
-              className="min-w-0 max-w-full truncate text-xs text-ink-soft"
-              title={`${first.ownerName} · ${first.accountName}`}
+              className="min-w-0 max-w-[11rem] truncate rounded-full bg-sage-soft px-2.5 py-0.5 text-sm font-bold leading-tight text-ink"
+              title={first.ownerName}
             >
-              {first.ownerName} · {first.accountName}
+              {first.ownerName}
             </span>
           ) : null}
-          <span className="shrink-0 whitespace-nowrap text-xs text-ink-soft">
+          {/* 游戏 · 区服做成日期样式的小标签：浅底、等宽数字、弱化层级。 */}
+          {first ? (
+            <span
+              className="shrink-0 whitespace-nowrap rounded-md bg-cream-deep px-1.5 py-0.5 text-[11px] font-medium leading-tight tabular-nums text-ink-soft"
+              title={first.accountName}
+            >
+              {first.accountName}
+            </span>
+          ) : null}
+          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-ink-soft">
             {first?.sessionIndex != null ? `第 ${first.sessionIndex} 次打卡 · ` : ''}
             {doneCount}/{group.items.length}
             {first?.serviceCount != null
