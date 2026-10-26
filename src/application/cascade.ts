@@ -76,6 +76,8 @@ export async function deleteOrderCascade(
     await ctx.table('attachments').delete(attachment.id);
     await ctx.db.attachmentBlobs.delete(attachment.id);
   }
+  // 本机站内提醒是订单派生数据：随订单删除，避免留下指向不存在订单的弹窗。
+  await ctx.db.local_reminders.where('orderId').equals(orderId).delete();
   // 累计事件（自引用更正链）先于任务删除，避免留下孤儿链。
   for (const event of ctx.data.task_progress_events.filter((row) =>
     taskIds.has(row.taskDefinitionId),

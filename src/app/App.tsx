@@ -19,6 +19,7 @@ import { OrderDetailPage } from '../features/orders/OrderDetailPage';
 import { LedgerPage } from '../features/ledger/LedgerPage';
 import { TemplatesPage } from '../features/templates/TemplatesPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { DueRemindersDialog } from '../features/reminders/DueRemindersDialog';
 
 const PRIMARY_NAV = [
   { name: 'today', label: '今日事项', short: '今日', path: '/today', icon: IconClipboard },
@@ -216,6 +217,7 @@ export function App() {
           </div>
         </Modal>
       </div>
+      <DueRemindersDialog />
       <Analytics />
     </div>
   );

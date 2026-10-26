@@ -98,3 +98,43 @@ test('F-02：未来到账时间可保存为待到账，不冲抵待收', async (
   await expect(page.getByText(/待到账 ¥30\.00/).first()).toBeVisible();
   await expect(page.getByText(/实收 ¥0\.00 · 待收 ¥100\.00/)).toBeVisible();
 });
+
+test('F-03：日历多选一次补录多个日期', async ({ page }) => {
+  await boot(page);
+  await createOwnerWithAccount(page, '迁移老板');
+
+  const editor = await openOrderEditor(page);
+  await editor.getByLabel('开始日期').fill('2026-03-01');
+  await editor.getByLabel('结束日期').fill('2026-03-31');
+  await editor.getByLabel('本期价格（元）').fill('100');
+  await editor.getByRole('checkbox').uncheck();
+  await editor.getByRole('button', { name: '添加任务' }).click();
+  await editor.getByLabel('任务标题').first().fill('每日签到');
+  await editor.getByLabel('订单标题').fill('迁移托管');
+  await editor.getByRole('button', { name: '创建订单' }).click();
+  await expect(page.getByRole('heading', { name: '迁移托管' })).toBeVisible();
+
+  // 多选三个历史日期（今天是 03-10），一次性补录。
+  await page.getByRole('button', { name: '多选日期批量完成' }).click();
+  await dayCell(page, '1').click();
+  await dayCell(page, '2').click();
+  await dayCell(page, '3').click();
+  await expect(page.getByText('已选 3 天 · 待完成 3 项')).toBeVisible();
+  await page.getByRole('button', { name: /完成所选/ }).click();
+
+  // 时钟被 install 后会冻结 toast 的自动消失，按文本定位本次结果而不是靠 role=status 唯一。
+  await expect(page.getByText('已补录 3 天 · 3 项完成')).toBeVisible();
+  // 落库后日期格变为已完成，单日面板显示带补录标记的打卡。
+  await expect(dayCell(page, '1')).toHaveClass(/day-cell-done/);
+  await dayCell(page, '2').click();
+  await expect(page.getByRole('button', { name: /✓ 每日签到（补录）/ })).toBeVisible();
+
+  // 全选未完成只挑仍有待做事项的历史/今日日期（03-04～03-10 共 7 天）。
+  await page.getByRole('button', { name: '多选日期批量完成' }).click();
+  await page.getByRole('button', { name: /全选未完成/ }).click();
+  await expect(page.getByText('已选 7 天 · 待完成 7 项')).toBeVisible();
+  // 未来日期不可选：03-11 的格子被禁用。
+  await expect(dayCell(page, '11')).toBeDisabled();
+  await page.getByRole('button', { name: '退出多选' }).click();
+  await expect(page.getByText(/已选 .* 天/)).toBeHidden();
+});

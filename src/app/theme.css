@@ -361,4 +361,21 @@
     outline: 2px solid rgba(48, 79, 61, 0.55);
     outline-offset: 1px;
   }
+
+  /* 多选补录：已选日期实心描边，与"今天"的双层描边、已完成的实心色都能区分。 */
+  .day-cell-picked {
+    outline: 2px solid var(--color-sage-deep);
+    outline-offset: 1px;
+    background: var(--color-sage-soft);
+    font-weight: 750;
+  }
+
+  .day-cell-picked:hover {
+    background: var(--color-sage-soft);
+    border-color: var(--color-sage-deep);
+  }
+
+  .day-cell:disabled {
+    cursor: not-allowed;
+  }
 }

@@ -110,6 +110,15 @@ export function IconEyeOff(props: IconProps) {
   );
 }
 
+export function IconBell(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M18 9a6 6 0 1 0-12 0c0 4.5-1.5 5.5-2 6.5h16c-.5-1-2-2-2-6.5Z" />
+      <path d="M9.5 19a2.5 2.5 0 0 0 5 0" />
+    </svg>
+  );
+}
+
 export function IconCalendar(props: IconProps) {
   return (
     <svg {...base(props)}>

@@ -38,6 +38,25 @@ export interface OrderColorMarkRowLocal {
 }
 
 /**
+ * 本机站内提醒（UF-053）。
+ *
+ * 只在本机生效：不进入 `.dgbk` 备份，也不同步安卓。恢复备份会清空，避免指向
+ * 已被替换掉的订单；订单/任务删除时随级联清理。
+ */
+export interface LocalReminderRow {
+  id: string;
+  orderId: string;
+  /** null = 整笔订单提醒；否则是该订单下的任务。 */
+  taskId: string | null;
+  /** 用户选择的提醒时刻（本地时间戳）。 */
+  remindAt: number;
+  note: string | null;
+  createdAt: number;
+  /** 用户点过「知道了」的时刻；非 null 不再弹出。 */
+  acknowledgedAt: number | null;
+}
+
+/**
  * Dexie 本地版本 1：全部业务表 + 本机表。
  *
  * 导出它不是为了让产品代码复用，而是让迁移测试**真的**能从一个已安装的旧库升上来：
@@ -86,6 +105,11 @@ export const LOCAL_SCHEMA_V3: Record<string, string | null> = {
   order_color_marks: null,
 };
 
+/** Dexie 本地版本 4：本机站内提醒（UF-053，不进入备份契约）。 */
+export const LOCAL_SCHEMA_V4: Record<string, string> = {
+  local_reminders: 'id, orderId, taskId, remindAt',
+};
+
 export class BusinessDatabase extends Dexie {
   owners!: EntityTable<TableRows['owners'], 'id'>;
   game_accounts!: EntityTable<TableRows['game_accounts'], 'id'>;
@@ -112,6 +136,7 @@ export class BusinessDatabase extends Dexie {
   template_seed_state!: EntityTable<TableRows['template_seed_state'], 'seedKey'>;
   reminder_settings!: EntityTable<TableRows['reminder_settings'], 'id'>;
   attachmentBlobs!: EntityTable<AttachmentBlobRowLocal, 'id'>;
+  local_reminders!: EntityTable<LocalReminderRow, 'id'>;
   dataset_meta!: EntityTable<DatasetMetaRow, 'id'>;
 
   constructor(name: string) {
@@ -121,6 +146,7 @@ export class BusinessDatabase extends Dexie {
     this.version(3)
       .stores(LOCAL_SCHEMA_V3)
       .upgrade((tx) => upgradeToSchema15(tx));
+    this.version(4).stores(LOCAL_SCHEMA_V4);
   }
 }
 
@@ -313,6 +339,8 @@ export async function writeDataSet(
     await db.attachmentBlobs.clear();
     const blobRows = [...attachments.entries()].map(([id, blob]) => ({ id, blob }));
     if (blobRows.length > 0) await db.attachmentBlobs.bulkAdd(blobRows);
+    // 本机提醒同样不随备份走：恢复后旧提醒引用的订单已不存在，必须清空。
+    await db.local_reminders.clear();
     // 颜色已随备份进入 orders.orderColor / task_definitions.colorArgb，
     // 恢复后不再有编号漂移问题；旧本机颜色表已在 Dexie 3 升级中删除。
   });

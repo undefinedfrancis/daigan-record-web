@@ -12,10 +12,14 @@ import {
   useToast,
 } from '../../components/ui';
 import {
+  IconBell,
   IconCalendar,
   IconCamera,
+  IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconList,
+  IconPlus,
   IconRefresh,
   IconTrash,
 } from '../../components/icons';
@@ -35,12 +39,13 @@ import { useQuery } from '../../app/useQuery';
 import { navigate } from '../../app/Router';
 import { toAppError } from '../../contracts/errors';
 import { beginOperation } from '../../pwa/updateSafety';
-import type { OrderDetailView } from '../../application/contracts';
+import type { OrderDetailView, ReminderView } from '../../application/contracts';
 import type { CascadeCounts } from '../../application/cascade';
 import type { ReceiptChannel } from '../../contracts/tables';
 import { RECURRENCE_LABELS, fromDateTimeInput, toDateTimeInput, weekdayText } from './orderUtils';
 import { OrderEditForm } from './OrderEditForm';
 import { CumulativePanel, RetiredHistoryPanel } from './CumulativePanel';
+import { ReminderDialog } from '../reminders/ReminderDialog';
 
 /** 月历网格（周一开头）：返回当月每日 ISO 日期，前置空位为 null。 */
 function monthCells(month: string): (string | null)[] {
@@ -52,6 +57,16 @@ function monthCells(month: string): (string | null)[] {
     ...Array.from({ length: lead }, () => null),
     ...Array.from({ length: count }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`),
   ];
+}
+
+/** 提醒时间按设备本地时区显示（与 datetime-local 输入一致）。 */
+function reminderStamp(epochMs: number): string {
+  return new Date(epochMs).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function shiftMonthOf(month: string, delta: number): string {
@@ -375,6 +390,8 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
   const { services, token, refresh } = useApp();
   const toast = useToast();
   const detail = useQuery(() => services.queries.orderDetail(orderId), [orderId]);
+  // UF-053 站内提醒：本机表，随 revision 自动刷新。
+  const reminders = useQuery<ReminderView[]>(() => services.reminders.list(orderId), [orderId]);
   const [error, setError] = useState<string | null>(null);
   const [opBusy, setOpBusy] = useState(false);
   const [modal, setModal] = useState<
@@ -383,6 +400,11 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
   const [amendTarget, setAmendTarget] = useState<string | null>(null);
   const [calMonth, setCalMonth] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
+  // 日历多选：迁移历史时一次补录多个日期，避免逐日逐项点击。
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchDates, setBatchDates] = useState<string[]>([]);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderTaskId, setReminderTaskId] = useState<string | null>(null);
   const [deletion, setDeletion] = useState<CascadeCounts | null>(null);
   const [photoUrls, setPhotoUrls] = useState<
     { id: string; url: string; taskDefinitionId: string | null; occurrenceId: string | null }[]
@@ -481,15 +503,16 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
     };
   }, [modal, data, orderId, services, photoTick]);
 
-  async function run(action: () => Promise<unknown>, message?: string) {
+  async function run<T>(action: () => Promise<T>, message?: string): Promise<T> {
     // 截图上传、收款、删除等写操作期间登记更新阻塞，避免刷新打断。
     const endOperation = beginOperation('order-detail-op');
     setOpBusy(true);
     setError(null);
     try {
-      await action();
+      const result = await action();
       refresh();
       if (message) toast(message, 'success');
+      return result;
     } catch (reason) {
       const text = toAppError(reason).message;
       setError(text);
@@ -499,6 +522,27 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
       setOpBusy(false);
       endOperation();
     }
+  }
+
+  async function saveReminder(input: {
+    taskId: string | null;
+    remindAt: number;
+    note: string | null;
+  }) {
+    const endOperation = beginOperation('order-detail-op');
+    setOpBusy(true);
+    try {
+      await services.reminders.save({ orderId, ...input }, token);
+      refresh();
+      toast('已设置提醒', 'success');
+    } finally {
+      setOpBusy(false);
+      endOperation();
+    }
+  }
+
+  async function removeReminder(id: string) {
+    await run(() => services.reminders.remove(id, token), '提醒已删除').catch(() => undefined);
   }
 
   useEffect(() => {
@@ -576,6 +620,55 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
   const selectedTasks = selectedEntries.flatMap((entry) => entry.tasks);
   const selectedDueTasks = selectedTasks.filter((task) => !task.inWindow);
   const selectedWindowTasks = selectedTasks.filter((task) => task.inWindow);
+
+  // 多选补录：只有"当天应做、尚未完成的普通任务"才可被一键完成，
+  // 累计任务与周期覆盖行（inWindow）不在此列——前者走累计进度，后者归触发日。
+  const countMode = data.periods.some((period) => period.serviceCount !== null);
+  const batchPendingByDate = new Map<string, number>();
+  for (const date of cells) {
+    if (!date || date > today) continue;
+    const pending = (calendarByDate.get(date) ?? [])
+      .flatMap((entry) => entry.tasks)
+      .filter(
+        (task) =>
+          !task.inWindow &&
+          !task.cumulative &&
+          !task.completed &&
+          task.attributedDate <= today,
+      );
+    if (pending.length > 0) batchPendingByDate.set(date, pending.length);
+  }
+  const batchPendingCount = batchDates.reduce(
+    (sum, date) => sum + (batchPendingByDate.get(date) ?? 0),
+    0,
+  );
+
+  function toggleBatchDate(date: string) {
+    setBatchDates((current) =>
+      current.includes(date)
+        ? current.filter((item) => item !== date)
+        : [...current, date].sort(),
+    );
+  }
+
+  function exitBatchMode() {
+    setBatchMode(false);
+    setBatchDates([]);
+  }
+
+  async function completeSelectedDates() {
+    const dates = [...batchDates].sort();
+    if (dates.length === 0) return;
+    const result = await run(() => services.tasks.completeDates({ orderId, dates }, token));
+    if (result.recorded > 0) {
+      toast(`已补录 ${result.dates} 天 · ${result.recorded} 项完成`, 'success');
+    }
+    if (result.skipped.length > 0) {
+      const unique = [...new Set(result.skipped.map((item) => `${item.title}：${item.reason}`))];
+      toast(unique.slice(0, 2).join('；'), 'info');
+    }
+    exitBatchMode();
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -776,6 +869,20 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                       {task.unit ?? ''}
                     </span>
                   ) : null}
+                  {order.cancelled ? null : (
+                    <Button
+                      variant="ghost"
+                      style={{ minHeight: 28, padding: '0 6px' }}
+                      title="给该任务设提醒"
+                      aria-label={`${task.title} 提醒`}
+                      onClick={() => {
+                        setReminderTaskId(task.id);
+                        setReminderOpen(true);
+                      }}
+                    >
+                      <IconBell size={15} />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     style={{ minHeight: 28, padding: '0 6px' }}
@@ -806,30 +913,112 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
         )}
       </Card>
 
+      <Card>
+        <div className="section-title flex-wrap gap-y-2">
+          <h2 className="whitespace-nowrap">
+            <IconBell size={17} /> 提醒
+          </h2>
+          {order.cancelled ? null : (
+            <Button
+              style={{ minHeight: 32, padding: '0 10px' }}
+              onClick={() => {
+                setReminderTaskId(null);
+                setReminderOpen(true);
+              }}
+            >
+              <IconPlus size={15} />
+              <span className="ml-1 text-xs">设提醒</span>
+            </Button>
+          )}
+        </div>
+        {(reminders.data ?? []).length === 0 ? (
+          <p className="muted">
+            还没有提醒。可以给整笔订单或单条任务设一个时间，到点后打开网站会弹窗提示。
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {(reminders.data ?? []).map((item) => (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line/70 bg-white/60 px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-2 text-sm">
+                    {item.acknowledgedAt !== null ? (
+                      <Badge>已提醒</Badge>
+                    ) : item.remindAt <= Date.now() ? (
+                      <Badge tone="warn">待提醒</Badge>
+                    ) : (
+                      <Badge>未到点</Badge>
+                    )}
+                    <span className="font-medium tabular-nums">{reminderStamp(item.remindAt)}</span>
+                    <span className="text-xs text-ink-soft">
+                      {item.taskTitle ? `任务：${item.taskTitle}` : '整笔订单'}
+                    </span>
+                  </span>
+                  {item.note ? (
+                    <span className="mt-0.5 block text-xs text-ink-soft">{item.note}</span>
+                  ) : null}
+                </span>
+                <Button
+                  variant="ghost"
+                  style={{ minHeight: 28, padding: '0 6px' }}
+                  title="删除提醒"
+                  aria-label={`删除提醒 ${reminderStamp(item.remindAt)}`}
+                  onClick={() => void removeReminder(item.id)}
+                >
+                  <IconTrash size={15} />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <RetiredHistoryPanel detail={data} onChanged={detail.reload} />
 
       <Card>
-        <div className="section-title">
-          <h2>
+        <div className="section-title flex-wrap gap-y-2">
+          <h2 className="whitespace-nowrap">
             <IconCalendar size={17} /> 打卡日历
           </h2>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            {data.calendar.length > 0 && !countMode ? (
+              <Button
+                variant={batchMode ? 'primary' : 'ghost'}
+                aria-pressed={batchMode}
+                aria-label={batchMode ? '退出多选' : '多选日期批量完成'}
+                title="一次勾选多个日期，批量补录完成"
+                style={{ minHeight: 32, padding: '0 8px' }}
+                onClick={() => (batchMode ? exitBatchMode() : setBatchMode(true))}
+              >
+                <IconList size={16} />
+                <span className="ml-1 text-xs">{batchMode ? '退出多选' : '多选'}</span>
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               aria-label="上个月"
               style={{ minHeight: 32, padding: '0 6px' }}
-              onClick={() => setCalMonth(shiftMonthOf(month, -1))}
+              onClick={() => {
+                setCalMonth(shiftMonthOf(month, -1));
+                // 多选只针对当前可见月份，翻月清空避免选到看不见的日期。
+                setBatchDates([]);
+              }}
             >
               <IconChevronLeft size={16} />
             </Button>
-            <span className="min-w-24 text-center text-[15px] font-semibold tabular-nums">
+            <span className="min-w-24 whitespace-nowrap text-center text-[15px] font-semibold tabular-nums">
               {month ? `${month.slice(0, 4)} 年 ${Number(month.slice(5, 7))} 月` : '—'}
             </span>
             <Button
               variant="ghost"
               aria-label="下个月"
               style={{ minHeight: 32, padding: '0 6px' }}
-              onClick={() => setCalMonth(shiftMonthOf(month, 1))}
+              onClick={() => {
+                setCalMonth(shiftMonthOf(month, 1));
+                setBatchDates([]);
+              }}
             >
               <IconChevronRight size={16} />
             </Button>
@@ -859,18 +1048,34 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                   const fullDone = allTasks.length > 0 && doneCount === allTasks.length;
                   const partDone = doneCount > 0 && !fullDone;
                   const isFuture = date > today;
+                  const picked = batchDates.includes(date);
+                  const pendingCount = batchPendingByDate.get(date) ?? 0;
+                  // 多选模式下不能选未来日与"当天没有应做任务/已全部完成"的格子。
+                  const batchDisabled = batchMode && (isFuture || pendingCount === 0);
                   return (
                     <span key={date} className="flex items-center justify-center">
                       <button
                         type="button"
-                        onClick={() => setSelectedDate(date)}
-                        aria-label={`${date}${fullDone ? ' 已完成' : partDone ? ' 部分完成' : ''}`}
+                        onClick={() =>
+                          batchMode ? toggleBatchDate(date) : setSelectedDate(date)
+                        }
+                        disabled={batchDisabled}
+                        aria-pressed={batchMode ? picked : undefined}
+                        aria-label={`${date}${fullDone ? ' 已完成' : partDone ? ' 部分完成' : ''}${
+                          batchMode ? (picked ? ' 已选' : pendingCount > 0 ? ' 可多选' : ' 无待完成') : ''
+                        }`}
                         title={
-                          scheduled
-                            ? `${doneCount}/${allTasks.length} 完成`
-                            : windowOnly
-                              ? `${everyTask.length} 个本周期任务（当天不是触发日）`
-                              : '无任务'
+                          batchMode
+                            ? pendingCount > 0
+                              ? `点击${picked ? '取消选择' : '选择'}：${pendingCount} 项待完成`
+                              : scheduled
+                                ? '该日没有待完成的普通任务'
+                                : '无任务'
+                            : scheduled
+                              ? `${doneCount}/${allTasks.length} 完成`
+                              : windowOnly
+                                ? `${everyTask.length} 个本周期任务（当天不是触发日）`
+                                : '无任务'
                         }
                         className={[
                           'day-cell',
@@ -884,7 +1089,9 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                                   ? 'day-cell-future'
                                   : '',
                           date === today ? 'day-cell-today' : '',
-                          date === selectedDayDate ? 'day-cell-selected' : '',
+                          !batchMode && date === selectedDayDate ? 'day-cell-selected' : '',
+                          picked ? 'day-cell-picked' : '',
+                          batchDisabled ? 'opacity-40' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
@@ -896,6 +1103,44 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 })}
               </div>
             </div>
+            {batchMode ? (
+              <div className="mt-3 rounded-xl border border-sage/60 bg-[#f3f8ef] px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm font-medium">
+                    已选 {batchDates.length} 天 · 待完成 {batchPendingCount} 项
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      style={{ minHeight: 32, padding: '0 8px' }}
+                      disabled={batchPendingByDate.size === 0}
+                      onClick={() => setBatchDates([...batchPendingByDate.keys()].sort())}
+                    >
+                      全选未完成（{batchPendingByDate.size} 天）
+                    </Button>
+                    <Button
+                      style={{ minHeight: 32, padding: '0 8px' }}
+                      disabled={batchDates.length === 0}
+                      onClick={() => setBatchDates([])}
+                    >
+                      清空
+                    </Button>
+                    <Button
+                      variant="primary"
+                      style={{ minHeight: 32, padding: '0 10px' }}
+                      disabled={batchDates.length === 0 || batchPendingCount === 0 || opBusy}
+                      onClick={() => void completeSelectedDates().catch(() => undefined)}
+                    >
+                      <IconCheck size={15} />
+                      <span className="ml-1">完成所选</span>
+                    </Button>
+                  </div>
+                </div>
+                <p className="muted mt-1.5">
+                  点击日期加入或移出选择；只补录尚未完成的普通打卡并标注为补录，已完成的日期不会重复记录。
+                  累计任务请到「累计进度」记录。
+                </p>
+              </div>
+            ) : (
             <div className="mt-3 rounded-xl border border-line bg-white/60 px-3 py-2">
               {selectedEntries.length > 0 ? (
                 <>
@@ -993,6 +1238,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 <p className="muted">该日没有安排任务。</p>
               )}
             </div>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs font-medium text-ink">
               <span className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full bg-sage ring-1 ring-sage-deep" />
@@ -1014,7 +1260,15 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 <span className="h-2.5 w-2.5 rounded-full border-2 border-sage-deep bg-white" />
                 今天
               </span>
-              <span className="muted">点击日期可查看、打卡或补录</span>
+              {batchMode ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#eaf3e6] ring-2 ring-sage-deep" />
+                  已选
+                </span>
+              ) : null}
+              <span className="muted">
+                {batchMode ? '点击日期加入或移出多选，再点「完成所选」' : '点击日期可查看、打卡或补录'}
+              </span>
             </div>
           </>
         )}
@@ -1122,6 +1376,14 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
           </div>
         ) : null}
       </Card>
+
+      <ReminderDialog
+        open={reminderOpen}
+        tasks={data.tasks.map((task) => ({ id: task.id, title: task.title }))}
+        initialTaskId={reminderTaskId}
+        onClose={() => setReminderOpen(false)}
+        onSave={saveReminder}
+      />
 
       <Modal open={modal === 'renew'} title="续期" onClose={() => setModal(null)} guardUpdates>
         <RenewForm
@@ -1384,7 +1646,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 void run(
                   () =>
                     order.cancelled
-                      ? services.orders.deleteCancelled(orderId, token)
+                      ? services.orders.deleteCancelled(orderId, token).then(() => undefined)
                       : services.orders.deleteEmpty(orderId, token),
                   '订单已删除',
                 )

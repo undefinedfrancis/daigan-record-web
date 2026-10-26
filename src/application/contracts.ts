@@ -279,8 +279,57 @@ export interface CompleteBatchCommand {
   gameDate: string | null;
 }
 
+/**
+ * 日历多选补录：把一批游戏日的**应做普通任务**一次性记为完成。
+ *
+ * - 只处理日期式托管（`serviceCount === null`）；按次数托管必须按轮次逐次操作。
+ * - 累计任务不走这里（由「累计进度」记录总值），会出现在 `skipped` 里。
+ * - 已完成的行保持原样，不覆盖既有完成时刻；同一请求重复提交天然幂等。
+ */
+export interface CompleteDatesCommand {
+  orderId: string;
+  /** ISO 游戏日；服务层升序去重，一次最多 366 天。 */
+  dates: string[];
+}
+
+export interface CompleteDatesResult {
+  /** 实际写入的打卡条数（同一 occurrence 跨多天只算一次）。 */
+  recorded: number;
+  /** 实际写入过的日期数。 */
+  dates: number;
+  /** 跳过原因（累计任务、已移除任务、超出服务期限等），供界面提示。 */
+  skipped: SkippedTask[];
+}
+
 /** UF-019 预设颜色标记。 */
 export type TaskColorTag = 'red' | 'amber' | 'green' | 'blue' | 'purple' | 'gray';
+
+/** UF-053 站内提醒：用户给订单或单条任务设定的本机提醒。 */
+export interface ReminderCommand {
+  orderId: string;
+  /** null = 整笔订单提醒。 */
+  taskId: string | null;
+  /** 本地时间戳；必须晚于保存时刻。 */
+  remindAt: number;
+  note: string | null;
+}
+
+export interface ReminderView {
+  id: string;
+  orderId: string;
+  taskId: string | null;
+  /** 任务标题；订单级提醒为 null。任务已被移除时为 null。 */
+  taskTitle: string | null;
+  remindAt: number;
+  note: string | null;
+  acknowledgedAt: number | null;
+}
+
+/** 到期未读提醒：带上订单与老板，供全局弹窗直接展示。 */
+export interface DueReminderView extends ReminderView {
+  orderTitle: string;
+  ownerNickname: string;
+}
 
 export const TASK_COLOR_TAGS: TaskColorTag[] = ['red', 'amber', 'green', 'blue', 'purple', 'gray'];
 
@@ -882,6 +931,8 @@ export interface Services {
       input: CompleteBatchCommand,
       token: DatasetToken,
     ): Promise<BatchCompletionDetailedResult>;
+    /** 日历多选补录：按日期批量完成普通打卡（仅日期式托管，累计任务跳过）。 */
+    completeDates(input: CompleteDatesCommand, token: DatasetToken): Promise<CompleteDatesResult>;
     undoBatch(batchId: string, token: DatasetToken): Promise<{ restored: number; conflicts: number }>;
     /** UF-019：设置或清除单个任务的颜色标记（本机保存）。设置为任务自身标记，覆盖整单下发的跟随标记。 */
     setTaskColor(taskId: string, color: string | null, token: DatasetToken): Promise<void>;
@@ -895,6 +946,22 @@ export interface Services {
       input: { orderId: string; sessionIndex: number; taskId: string; completed: boolean },
       token: DatasetToken,
     ): Promise<void>;
+  };
+  /**
+   * UF-053 站内提醒（本机保存，不进入备份、不同步安卓）。
+   *
+   * 只在用户打开网站时检查：到期未读的提醒由全局弹窗展示，点「知道了」后
+   * 写入 `acknowledgedAt`，不再重复弹出。
+   */
+  reminders: {
+    save(input: ReminderCommand, token: DatasetToken): Promise<string>;
+    remove(id: string, token: DatasetToken): Promise<void>;
+    /** 标记已读（幂等）；用于弹窗的「知道了」与「查看订单」。 */
+    acknowledge(ids: string[], token: DatasetToken): Promise<number>;
+    /** 某订单的提醒清单（含已读），按时间升序。 */
+    list(orderId: string): Promise<ReminderView[]>;
+    /** 到期未读：跳过已归档/已作废订单与已移除任务。 */
+    due(): Promise<DueReminderView[]>;
   };
   /** UF-038 累计进度命令与查询（显式 scope + 追加式事件历史）。 */
   progress: {

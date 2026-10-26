@@ -23,6 +23,8 @@ import { colourTokenToArgb } from '../backup/normalize/localColours';
 import type {
   BatchCompletionDetailedResult,
   CompleteBatchCommand,
+  CompleteDatesCommand,
+  CompleteDatesResult,
   SetProgressCommand,
   SkippedTask,
 } from './contracts';
@@ -721,6 +723,109 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
           now,
         );
         await persistOrderDerived(ctx, order.id);
+      });
+    },
+
+    /**
+     * 日历多选补录：按游戏日批量完成普通打卡。
+     *
+     * 与 `completeBatch` 的差别是日期可以不只今天（迁移历史），因此不写
+     * `completion_batches`（批次表只有一个 gameDate，跨日批次会让撤销语义失真），
+     * 也不覆盖任何已有完成时刻；误操作按项点回即可。整批在一个事务内写入。
+     */
+    async completeDates(
+      input: CompleteDatesCommand,
+      token: DatasetToken,
+    ): Promise<CompleteDatesResult> {
+      return runtime.write(token, async (ctx) => {
+        const order = assertOrderWritable(ctx.data, input.orderId);
+        const nowStamp = now();
+        const today = accountGameDate(order, nowStamp);
+        if (input.dates.length === 0) throw new AppError('INVALID_INPUT', '请选择日期');
+        const dates = [...new Set(input.dates)].sort();
+        if (dates.length > 366) throw new AppError('INVALID_INPUT', '一次最多补录 366 天');
+        for (const date of dates) {
+          if (!isISODate(date)) throw new AppError('INVALID_INPUT', `游戏日期不合法：${date}`);
+          if (date > today) throw new AppError('INVALID_INPUT', `不能为未来日期打卡：${date}`);
+        }
+
+        const periods = ctx.data.hosting_periods.filter((row) => row.orderId === order.id);
+        if (periods.some((period) => period.serviceCount !== null)) {
+          throw new AppError('INVALID_INPUT', '按次数托管请按轮次逐个打卡，暂不支持按日期批量补录');
+        }
+
+        const skipped: SkippedTask[] = [];
+        const skippedKeys = new Set<string>();
+        const addSkip = (taskId: string, title: string, reason: string) => {
+          const key = `${taskId}|${reason}`;
+          if (skippedKeys.has(key)) return;
+          skippedKeys.add(key);
+          skipped.push({ taskId, title, reason });
+        };
+
+        let recorded = 0;
+        const writtenDates = new Set<string>();
+        for (const date of dates) {
+          // 历史补录要落在该日期实际所属的期次（续期后同一月可能横跨两期）。
+          const period = periods
+            .filter((row) => date >= row.startDate && date <= periodScheduleEnd(row))
+            .sort((left, right) => right.periodIndex - left.periodIndex)[0];
+          if (!period) {
+            addSkip(order.id, order.title, `${date} 不在服务期限内`);
+            continue;
+          }
+          const tasks = ctx.data.task_definitions.filter(
+            (row) => row.orderId === order.id && row.periodId === period.id,
+          );
+          for (const task of tasks) {
+            if (task.retiredAt !== null) {
+              addSkip(task.id, task.title, '该任务已移除，不能新增历史打卡');
+              continue;
+            }
+            if (isCumulativeTask(task)) {
+              addSkip(task.id, task.title, '累计任务请到「累计进度」记录，不能按日期批量勾选');
+              continue;
+            }
+            const slot = slotFor(task, period, date);
+            if (!slot) continue;
+            const existing = ctx.data.task_occurrences.find(
+              (row) => row.taskDefinitionId === task.id && row.occurrenceKey === slot.key,
+            );
+            // 已有完成记录直接跳过：保留原始完成时刻，重复点选同一批日期也安全。
+            if (existing?.completedAt) continue;
+            const value =
+              task.progressType === 'CHECKBOX'
+                ? '1'
+                : numericCompletionValue(task, existing?.value ?? null);
+            await writeOccurrence(
+              ctx,
+              task,
+              slot,
+              (row) => ({
+                id: row?.id ?? '',
+                taskDefinitionId: task.id,
+                occurrenceKey: row?.occurrenceKey ?? '',
+                gameDate: row?.gameDate ?? slot.gameDate,
+                windowStart: row?.windowStart ?? slot.windowStart,
+                windowEnd: row?.windowEnd ?? slot.windowEnd,
+                completedAt: nowStamp,
+                recordedAt: nowStamp,
+                // 补录标记按写入归属日判定（周任务的槽可能落在本周触发日）。
+                backfilled: slot.gameDate < today || row?.backfilled === 1 ? 1 : 0,
+                completionBatchId: row?.completionBatchId ?? null,
+                value,
+                createdAt: row?.createdAt ?? nowStamp,
+              }),
+              newId,
+              now,
+            );
+            recorded += 1;
+            writtenDates.add(date);
+          }
+        }
+
+        if (recorded > 0) await persistOrderDerived(ctx, order.id);
+        return { recorded, dates: writtenDates.size, skipped };
       });
     },
 

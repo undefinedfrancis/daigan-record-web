@@ -1227,6 +1227,8 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
             await ctx.table('task_progress_events').delete(event.id);
           }
           await ctx.table('task_definitions').delete(row.id);
+          // 任务级提醒随任务删除，避免弹窗指向已不存在的任务。
+          await ctx.db.local_reminders.where('taskId').equals(row.id).delete();
         }
 
         // 重建打卡项（托管单；有记录/截图的历史行保留）

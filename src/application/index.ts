@@ -9,6 +9,7 @@ import { createCumulativeServices } from './cumulative';
 import { createOrderServices } from './orders';
 import { createQueryServices } from './queries';
 import { createReceiptServices } from './receipts';
+import { createReminderServices } from './reminders';
 import { createServerOptionServices } from './serverOptions';
 import { createTaskServices } from './tasks';
 import { createTemplateServices } from './templates';
@@ -34,6 +35,7 @@ export function createServices(
   const tasks = createTaskServices(deps);
   const progress = createCumulativeServices(deps);
   const attachments = createAttachmentServices(deps);
+  const reminders = createReminderServices(deps);
   const queries = createQueryServices(deps);
   const exportService = createExportService({ runtime, now: clock });
   const restore = createRestoreService(deps);
@@ -48,6 +50,7 @@ export function createServices(
     tasks,
     progress,
     attachments,
+    reminders,
     queries,
     restore,
     exportBackup: exportService,
