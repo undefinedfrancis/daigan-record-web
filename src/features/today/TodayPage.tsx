@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, EmptyState, ErrorText, Select, TextInput, useToast } from '../../components/ui';
 import { IconCamera, IconCheck, IconChevronRight, IconRefresh } from '../../components/icons';
 import { COLOR_SWATCHES, ColorTagPicker, colorHexOf } from '../../components/ColorTagPicker';
@@ -14,6 +14,13 @@ import {
   cumulativeOperationPayload,
   operationIdFor,
 } from '../orders/pendingOperations';
+import {
+  loadCollapsed,
+  nextCollapsed,
+  orderGroupKey,
+  periodicGroupKey,
+  saveCollapsed,
+} from './collapseState';
 
 function groupByOrder(items: TodayTaskItem[]): { orderId: string; title: string; items: TodayTaskItem[] }[] {
   const map = new Map<string, { orderId: string; title: string; items: TodayTaskItem[] }>();
@@ -26,27 +33,7 @@ function groupByOrder(items: TodayTaskItem[]): { orderId: string; title: string;
 }
 
 type OrderGroupModel = { orderId: string; title: string; items: TodayTaskItem[] };
-
-const COLLAPSED_KEY = 'daigan.today.collapsed';
-
-function loadCollapsed(): Set<string> {
-  try {
-    const raw = localStorage.getItem(COLLAPSED_KEY);
-    if (!raw) return new Set();
-    const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function saveCollapsed(ids: Set<string>): void {
-  try {
-    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids]));
-  } catch {
-    // 隐私模式等写入失败时只影响本次记忆
-  }
-}
+type PeriodicGroupModel = OrderGroupModel & { gameDate: string };
 
 function TaskRow({
   item,
@@ -201,7 +188,7 @@ function OrderGroup({
           <Button
             variant="ghost"
             aria-expanded={!collapsed}
-            aria-label={collapsed ? '展开任务列表' : '收起任务列表'}
+            aria-label={`${collapsed ? '展开' : '收起'}「${group.title}」任务列表`}
             style={{ minHeight: 28, minWidth: 28, padding: '0 4px' }}
             onClick={onToggleCollapse}
           >
@@ -291,6 +278,89 @@ function OrderGroup({
   );
 }
 
+/** 本周期任务（非触发日仍在周期窗口内）的分组：与托管组一致，可折叠并记忆。 */
+function PeriodicGroup({
+  group,
+  collapsed,
+  onToggleCollapse,
+  onToggleItem,
+  onSaveValue,
+  onUpload,
+  onColor,
+}: {
+  group: PeriodicGroupModel;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onToggleItem: (item: TodayTaskItem) => void;
+  onSaveValue: (item: TodayTaskItem, value: string) => void;
+  onUpload: (item: TodayTaskItem, files: File[]) => void;
+  onColor: (item: TodayTaskItem, color: string | null) => void;
+}) {
+  const doneCount = group.items.filter((item) => item.completed).length;
+  const first = group.items[0];
+  return (
+    <div className="rounded-2xl border border-dashed border-line bg-white/40 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pb-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <Button
+            variant="ghost"
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? '展开' : '收起'}「${group.title}」本周期任务 ${group.gameDate}`}
+            style={{ minHeight: 28, minWidth: 28, padding: '0 4px' }}
+            onClick={onToggleCollapse}
+          >
+            <IconChevronRight
+              size={16}
+              className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}
+            />
+          </Button>
+          <button
+            type="button"
+            className="min-w-0 max-w-full truncate text-left text-sm font-semibold"
+            title={group.title}
+            onClick={() => navigate(`/orders/${group.orderId}`)}
+          >
+            {group.title}
+          </button>
+          {first ? (
+            <span
+              className="min-w-0 max-w-[11rem] truncate rounded-full bg-sage-soft px-2.5 py-0.5 text-sm font-bold leading-tight text-ink"
+              title={first.ownerName}
+            >
+              {first.ownerName}
+            </span>
+          ) : null}
+          {first ? (
+            <span
+              className="shrink-0 whitespace-nowrap rounded-md bg-cream-deep px-1.5 py-0.5 text-[11px] font-medium leading-tight tabular-nums text-ink-soft"
+              title={first.accountName}
+            >
+              {first.accountName}
+            </span>
+          ) : null}
+        </div>
+        <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-ink-soft">
+          本周期归属 {group.gameDate} · {doneCount}/{group.items.length}
+        </span>
+      </div>
+      {!collapsed ? (
+        <ul>
+          {group.items.map((item) => (
+            <TaskRow
+              key={item.occurrenceId ?? item.taskId}
+              item={item}
+              onToggle={() => onToggleItem(item)}
+              onColor={(color) => onColor(item, color)}
+              onSaveValue={(value) => onSaveValue(item, value)}
+              onUpload={(files) => onUpload(item, files)}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function TodayPage() {
   const { services, token, refresh } = useApp();
   const toast = useToast();
@@ -321,17 +391,14 @@ export function TodayPage() {
     [today.data, colorFilter],
   );
   const periodicGroups = useMemo(() => {
-    const map = new Map<
-      string,
-      { orderId: string; orderTitle: string; gameDate: string; items: TodayTaskItem[] }
-    >();
+    const map = new Map<string, PeriodicGroupModel>();
     for (const item of (today.data?.periodic ?? []).filter(
       (entry) => !colorFilter || entry.colorTag === colorFilter,
     )) {
-      const key = `${item.orderId}:${item.gameDate}`;
+      const key = periodicGroupKey(item.orderId, item.gameDate);
       const group = map.get(key) ?? {
         orderId: item.orderId,
-        orderTitle: item.orderTitle,
+        title: item.orderTitle,
         gameDate: item.gameDate,
         items: [],
       };
@@ -430,14 +497,14 @@ export function TodayPage() {
     await run(() => services.tasks.setTaskColor(item.taskId, color, token));
   }
 
-  function toggleCollapse(orderId: string) {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(orderId)) next.delete(orderId);
-      else next.add(orderId);
-      saveCollapsed(next);
-      return next;
-    });
+  // 折叠状态在提交后写入本地记忆：setState 的 updater 必须是纯函数（StrictMode 会重复调用）。
+  useEffect(() => {
+    saveCollapsed(collapsed);
+  }, [collapsed]);
+
+  /** `key` 由 collapseState 的 orderGroupKey / periodicGroupKey 生成，两类分组互不影响。 */
+  function toggleCollapse(key: string) {
+    setCollapsed((current) => nextCollapsed(current, key));
   }
 
   async function saveValue(item: TodayTaskItem, value: string) {
@@ -696,8 +763,8 @@ export function TodayPage() {
                   key={group.orderId}
                   group={group}
                   busy={busy}
-                  collapsed={collapsed.has(group.orderId)}
-                  onToggleCollapse={() => toggleCollapse(group.orderId)}
+                  collapsed={collapsed.has(orderGroupKey(group.orderId))}
+                  onToggleCollapse={() => toggleCollapse(orderGroupKey(group.orderId))}
                   onToggleItem={toggle}
                   onSaveValue={saveValue}
                   onUpload={upload}
@@ -725,8 +792,8 @@ export function TodayPage() {
                   key={group.orderId}
                   group={group}
                   busy={busy}
-                  collapsed={collapsed.has(group.orderId)}
-                  onToggleCollapse={() => toggleCollapse(group.orderId)}
+                  collapsed={collapsed.has(orderGroupKey(group.orderId))}
+                  onToggleCollapse={() => toggleCollapse(orderGroupKey(group.orderId))}
                   onToggleItem={toggle}
                   onSaveValue={saveValue}
                   onUpload={upload}
@@ -746,36 +813,21 @@ export function TodayPage() {
             <span className="muted">今天不是触发日 · 勾选会补录到周期起点</span>
           </div>
           <div className="flex flex-col gap-3">
-            {periodicGroups.map((group) => (
-              <div
-                key={`${group.orderId}:${group.gameDate}`}
-                className="rounded-2xl border border-dashed border-line bg-white/40 px-3 py-2"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
-                  <button
-                    type="button"
-                    className="min-w-0 max-w-full truncate text-left text-sm font-semibold"
-                    title={group.orderTitle}
-                    onClick={() => navigate(`/orders/${group.orderId}`)}
-                  >
-                    {group.orderTitle}
-                  </button>
-                  <span className="text-xs text-ink-soft">本周期归属 {group.gameDate}</span>
-                </div>
-                <ul>
-                  {group.items.map((item) => (
-                    <TaskRow
-                      key={item.occurrenceId ?? item.taskId}
-                      item={item}
-                      onToggle={() => toggle(item)}
-                      onColor={(color) => setTaskColor(item, color)}
-                      onSaveValue={(value) => saveValue(item, value)}
-                      onUpload={(files) => upload(item, files)}
-                    />
-                  ))}
-                </ul>
-              </div>
-            ))}
+            {periodicGroups.map((group) => {
+              const key = periodicGroupKey(group.orderId, group.gameDate);
+              return (
+                <PeriodicGroup
+                  key={key}
+                  group={group}
+                  collapsed={collapsed.has(key)}
+                  onToggleCollapse={() => toggleCollapse(key)}
+                  onToggleItem={toggle}
+                  onSaveValue={saveValue}
+                  onUpload={upload}
+                  onColor={(item, color) => setTaskColor(item, color)}
+                />
+              );
+            })}
           </div>
         </Card>
       ) : null}

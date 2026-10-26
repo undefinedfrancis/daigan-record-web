@@ -3,7 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * 2026-10-26 用户反馈修复的浏览器生产路径证据：
  * - F-01：每月任务在其周期内仍可查看，非触发日补录归到触发日；
- * - F-02：收款可预填未来到账时间，到账前显示"待到账"且不冲抵待收。
+ * - F-02：收款可预填未来到账时间，到账前显示"待到账"且不冲抵待收；
+ * - F-04：本周期任务分组像托管任务一样可折叠，收起状态本地记忆。
  */
 
 const GAME_START = new Date('2026-03-10T04:00:00Z'); // 上海 12:00 → 游戏日 2026-03-10
@@ -81,6 +82,38 @@ test('F-01：非触发日仍能看到本周期任务，补录归到触发日', a
   // 触发日格子也同步为已完成（同一个 occurrence）。
   await dayCell(page, '15').click();
   await expect(page.getByRole('button', { name: /✓ 月度大活动/ })).toBeVisible();
+});
+
+test('F-04：本周期任务分组可折叠，收起状态刷新后保留', async ({ page }) => {
+  await boot(page);
+  await createOwnerWithAccount(page, '折叠老板');
+  await createMonthlyHosting(page, '折叠托管');
+
+  // 03-16：触发日已过，本周期任务进入「今日事项」的本周期卡片。
+  await page.clock.setSystemTime(AFTER_TRIGGER);
+  await page.getByRole('button', { name: '今日事项' }).click();
+  await expect(page.getByRole('heading', { name: '本周期任务' })).toBeVisible();
+
+  const task = page.getByRole('checkbox', { name: '月度大活动 未达成' });
+  await expect(task).toBeVisible();
+  await expect(page.getByText(/本周期归属 2026-03-15 · 0\/1/)).toBeVisible();
+
+  // 与托管任务一致：组头箭头收起后只留组头。
+  await page.getByRole('button', { name: '收起「折叠托管」本周期任务 2026-03-15' }).click();
+  await expect(task).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '本周期任务' })).toBeVisible();
+
+  // 刷新后仍保持收起（localStorage 记忆）：组头在、且是收起态，任务行不渲染。
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '今日事项' })).toBeVisible();
+  const reopen = page.getByRole('button', { name: '展开「折叠托管」本周期任务 2026-03-15' });
+  await expect(reopen).toBeVisible();
+  await expect(reopen).toHaveAttribute('aria-expanded', 'false');
+  await expect(task).toHaveCount(0);
+
+  // 再点一次恢复展开，任务可继续勾选。
+  await reopen.click();
+  await expect(task).toBeVisible();
 });
 
 test('F-02：未来到账时间可保存为待到账，不冲抵待收', async ({ page }) => {
