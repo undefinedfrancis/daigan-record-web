@@ -3,8 +3,8 @@
  *
  * 两类分组共用一份记录，但键空间分开：
  * - 托管任务组：一个订单一个组，键就是订单 id（沿用旧数据，无需迁移）；
- * - 本周期任务组：同一订单在窗口内可能有多个归属日，键为 `periodic:<订单>:<归属日>`，
- *   这样收起某一天的组不会把托管组或同订单的其他归属日一起收起。
+ * - 本周期任务组：**按老板合并**，键为 `owner:<老板 id>`。同一个老板的多个版本、
+ *   多个周期归属日都收在同一个折叠里（否则同一订单的 4 个归属日会被拆成 4 个折叠）。
  */
 export const COLLAPSED_KEY = 'daigan.today.collapsed';
 
@@ -16,9 +16,9 @@ export function orderGroupKey(orderId: string): string {
   return orderId;
 }
 
-/** 本周期任务组的折叠键（订单 + 归属日）。 */
-export function periodicGroupKey(orderId: string, gameDate: string): string {
-  return `periodic:${orderId}:${gameDate}`;
+/** 本周期任务组的折叠键（一个老板一个组）。 */
+export function ownerGroupKey(ownerId: string): string {
+  return `owner:${ownerId}`;
 }
 
 /** 当前环境的 localStorage；隐私模式或非浏览器环境下返回 null。 */

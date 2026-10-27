@@ -337,6 +337,8 @@ export interface TodayTaskItem {
   taskId: string;
   orderId: string;
   orderTitle: string;
+  /** 所属老板 id：本周期任务按老板折叠分组用的稳定标识（昵称可重名，不能用它分组）。 */
+  ownerId: string;
   ownerName: string;
   accountName: string;
   /** UF-019 任务颜色标记，null 表示未标记。 */
@@ -386,6 +388,14 @@ export interface TodayTaskItem {
 
 export interface TodayView {
   gameDate: string;
+  /**
+   * 该时区下的**公历**今天（不按每日刷新回退）。
+   *
+   * 页头返图日期用它；未到每日刷新时间时它会比 `gameDate` 晚一天，两者都要展示清楚。
+   */
+  todayDate: string;
+  /** `gameDate` / `todayDate` 的换算时区（取活动订单，缺省 Asia/Shanghai）。 */
+  timeZoneId: string;
   hosting: TodayTaskItem[];
   shortTasks: TodayTaskItem[];
   /**

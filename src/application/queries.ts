@@ -19,7 +19,7 @@ import {
 } from '../domain/ledger';
 import { argbToColourToken } from '../backup/normalize/localColours';
 import { legacyModeFromServiceDefaults } from '../backup/normalize/categoryDefaults';
-import { countServiceDaysUsed, gameDateAt, monthRange } from '../domain/gameCalendar';
+import { countServiceDaysUsed, gameDateAt, localDateAt, monthRange } from '../domain/gameCalendar';
 import { countPeriodServiceStart, resolveActiveCountSession } from '../domain/countSessions';
 import {
   roundDueTasks,
@@ -367,6 +367,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           const base = {
             orderId: order.id,
             orderTitle: order.title,
+            ownerId: owner?.id ?? '',
             ownerName: ownerLabel(owner),
             accountName: accountLabel(account),
           };
@@ -694,6 +695,9 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
         const refresh = firstOrder?.dailyRefreshMinutes ?? 300;
         return {
           gameDate: gameDateAt(now(), zoneId, refresh),
+          // 公历今天与游戏日分开算：刷新时间之前两者不同，页头要把这层差别说清楚。
+          todayDate: localDateAt(now(), zoneId),
+          timeZoneId: zoneId,
           hosting,
           shortTasks,
           periodic,

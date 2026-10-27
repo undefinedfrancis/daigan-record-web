@@ -2,10 +2,10 @@
  * 由 vite-plugins/pwaBuildPlugin.ts 在生产构建时替换占位符并写入 dist/sw.js。
  * 生命周期：按构建原子预缓存 → 安装成功停在 waiting → 页面显式确认后才激活。
  */
-const BUILD_ID = 'fd5577413a68b8ee';
+const BUILD_ID = '1dfc5e859139face';
 const APP_VERSION = '0.1.0';
 const BUILD_LABEL = '';
-const PRECACHE = ["assets/index-060Vn2pv.css","assets/index-sGyvTcDo.js","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","index.html","manifest.webmanifest"];
+const PRECACHE = ["assets/index-D7TBg6ik.js","assets/index-bBDmAd4Y.css","icons/apple-touch-icon.png","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","index.html","manifest.webmanifest"];
 
 const CACHE_PREFIX = 'daigan-pwa';
 /** 旧版固定缓存名（升级到按构建缓存前的实现），名字不含 scope，需另行核实归属后才能清理。 */

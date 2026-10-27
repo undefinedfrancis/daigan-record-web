@@ -4,14 +4,16 @@ import {
   loadCollapsed,
   nextCollapsed,
   orderGroupKey,
-  periodicGroupKey,
+  ownerGroupKey,
   saveCollapsed,
   type CollapseStore,
 } from '../../src/features/today/collapseState';
 
 /**
- * 今日事项分组折叠状态（2026-10-26 用户反馈）：
- * 「本周期任务」要和「托管任务」一样能逐个分组收起，且收起状态互不串组、可记忆。
+ * 今日事项分组折叠状态：
+ * - 「托管任务」按订单成组；
+ * - 「本周期任务」**按老板**成组（2026-10-27 用户反馈：按刷新周期拆会把同一老板的
+ *   一个版本拆成 4 个折叠，实际要的是老板一个折叠、内部再分版本/归属日）。
  */
 
 function memoryStore(): CollapseStore & { data: Map<string, string> } {
@@ -30,35 +32,38 @@ describe('今日事项分组折叠键', () => {
     expect(orderGroupKey('order-1')).toBe('order-1');
   });
 
-  it('本周期任务组按「订单 + 归属日」区分，且不与托管组共用同一个键', () => {
-    expect(periodicGroupKey('order-1', '2026-03-15')).toBe('periodic:order-1:2026-03-15');
-    expect(periodicGroupKey('order-1', '2026-03-15')).not.toBe(orderGroupKey('order-1'));
-    expect(periodicGroupKey('order-1', '2026-03-15')).not.toBe(
-      periodicGroupKey('order-1', '2026-04-15'),
-    );
+  it('本周期任务组只按老板：同一老板的多个版本/归属日共用一个键', () => {
+    expect(ownerGroupKey('owner-1')).toBe('owner:owner-1');
+    // 老板维度不带订单或日期，所以版本、归属日都不会再拆出新的折叠键。
+    expect(ownerGroupKey('owner-1')).toBe(ownerGroupKey('owner-1'));
+    expect(ownerGroupKey('owner-1')).not.toBe(ownerGroupKey('owner-2'));
+  });
+
+  it('老板组的键不会与同 id 的托管组撞车', () => {
+    expect(ownerGroupKey('owner-1')).not.toBe(orderGroupKey('owner-1'));
   });
 });
 
 describe('折叠状态切换', () => {
   it('同一个键点一次收起、再点一次展开，且不改动传入的集合', () => {
     const initial = new Set<string>();
-    const collapsed = nextCollapsed(initial, periodicGroupKey('order-1', '2026-03-15'));
-    expect(collapsed.has(periodicGroupKey('order-1', '2026-03-15'))).toBe(true);
+    const collapsed = nextCollapsed(initial, ownerGroupKey('owner-1'));
+    expect(collapsed.has(ownerGroupKey('owner-1'))).toBe(true);
     expect(initial.size).toBe(0);
 
-    const expanded = nextCollapsed(collapsed, periodicGroupKey('order-1', '2026-03-15'));
-    expect(expanded.has(periodicGroupKey('order-1', '2026-03-15'))).toBe(false);
+    const expanded = nextCollapsed(collapsed, ownerGroupKey('owner-1'));
+    expect(expanded.has(ownerGroupKey('owner-1'))).toBe(false);
     // 原集合保持不变，便于 React 依赖比较。
-    expect(collapsed.has(periodicGroupKey('order-1', '2026-03-15'))).toBe(true);
+    expect(collapsed.has(ownerGroupKey('owner-1'))).toBe(true);
   });
 
   it('只影响被点击的那一组', () => {
     let state = nextCollapsed(new Set<string>(), orderGroupKey('order-1'));
-    state = nextCollapsed(state, periodicGroupKey('order-1', '2026-03-15'));
-    state = nextCollapsed(state, periodicGroupKey('order-1', '2026-03-15'));
+    state = nextCollapsed(state, ownerGroupKey('owner-1'));
+    state = nextCollapsed(state, ownerGroupKey('owner-1'));
 
     expect(state.has(orderGroupKey('order-1'))).toBe(true);
-    expect(state.has(periodicGroupKey('order-1', '2026-03-15'))).toBe(false);
+    expect(state.has(ownerGroupKey('owner-1'))).toBe(false);
   });
 });
 
@@ -70,7 +75,7 @@ describe('折叠状态记忆', () => {
   });
 
   it('保存后能原样读回', () => {
-    const ids = new Set([orderGroupKey('order-1'), periodicGroupKey('order-2', '2026-03-15')]);
+    const ids = new Set([orderGroupKey('order-1'), ownerGroupKey('owner-2')]);
     saveCollapsed(ids, store);
     expect(JSON.parse(store.data.get(COLLAPSED_KEY) ?? '[]')).toHaveLength(2);
     expect([...loadCollapsed(store)].sort()).toEqual([...ids].sort());
