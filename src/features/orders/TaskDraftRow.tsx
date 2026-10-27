@@ -1,5 +1,6 @@
 import { Button, Select, TextInput } from '../../components/ui';
-import { IconTrash } from '../../components/icons';
+import { IconArrowDown, IconArrowUp, IconGrip, IconTrash } from '../../components/icons';
+import type { SortableItemControl } from '../../components/SortableList';
 import { MonthDayInputs } from '../../components/MonthDayInputs';
 import type { TemplateTaskDraft } from '../../application/contracts';
 import type { ProgressType, Recurrence } from '../../contracts/tables';
@@ -19,16 +20,39 @@ export function TaskDraftRow({
   onChange,
   onRemove,
   allowOneTime = true,
+  sortControl,
 }: {
   task: TaskDraftItem;
   onChange: (patch: Partial<TaskDraftItem>) => void;
   onRemove: () => void;
   /** 托管单不允许"一次性"任务（备份契约禁止）；存量脏数据仍保留可见并提示修改。 */
   allowOneTime?: boolean;
+  /** 排序控件（拖动 + 上/下移）；提交顺序即 sortOrder，保存后今日事项同步。 */
+  sortControl?: SortableItemControl;
 }) {
   return (
-    <li className="rounded-2xl border border-line/80 bg-white/75 p-3 shadow-[0_1px_0_rgba(48,79,61,0.05)]">
+    <li
+      {...(sortControl?.itemProps ?? {})}
+      className={`rounded-2xl border bg-white/75 p-3 shadow-[0_1px_0_rgba(48,79,61,0.05)] ${
+        sortControl?.dragging ? 'border-sage-deep/50 bg-sage-soft/40' : 'border-line/80'
+      }`}
+    >
       <div className="flex flex-wrap items-center gap-2.5">
+        {sortControl ? (
+          <button
+            type="button"
+            {...sortControl.handleProps}
+            className="flex h-8 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-ink-soft"
+            style={{ touchAction: 'none' }}
+          >
+            <IconGrip size={16} />
+          </button>
+        ) : null}
+        {sortControl ? (
+          <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-ink-soft">
+            {sortControl.index + 1}
+          </span>
+        ) : null}
         <TextInput
           value={task.title}
           onChange={(event) => onChange({ title: event.target.value })}
@@ -94,6 +118,26 @@ export function TaskDraftRow({
             </option>
           ) : null}
         </Select>
+        {sortControl ? (
+          <>
+            <Button
+              variant="ghost"
+              aria-label="上移任务"
+              disabled={!sortControl.canMoveUp}
+              onClick={sortControl.moveUp}
+            >
+              <IconArrowUp size={16} />
+            </Button>
+            <Button
+              variant="ghost"
+              aria-label="下移任务"
+              disabled={!sortControl.canMoveDown}
+              onClick={sortControl.moveDown}
+            >
+              <IconArrowDown size={16} />
+            </Button>
+          </>
+        ) : null}
         <Button variant="ghost" aria-label="删除任务" onClick={onRemove}>
           <IconTrash size={16} />
         </Button>

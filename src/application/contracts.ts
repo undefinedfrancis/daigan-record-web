@@ -947,6 +947,16 @@ export interface Services {
     /** UF-019：设置或清除单个任务的颜色标记（本机保存）。设置为任务自身标记，覆盖整单下发的跟随标记。 */
     setTaskColor(taskId: string, color: string | null, token: DatasetToken): Promise<void>;
     /**
+     * 手动排序（2026-10-27 用户反馈）：把页面看到的条目顺序写回 `task_definitions.sortOrder`。
+     *
+     * `orderedTaskIds` 只需给出**本次可见**的条目；看不见的任务槽位原地保留，
+     * 因此今日事项（只看今天）与订单编辑页（看全部）可以共用同一个顺序。
+     */
+    reorderTasks(
+      input: { orderId: string; orderedTaskIds: string[] },
+      token: DatasetToken,
+    ): Promise<void>;
+    /**
      * 已移除任务的**历史**补记/撤销（计次托管）。
      *
      * 只作用于已移除任务、已存在的轮次、归属日不晚于退休日；普通数值任务沿用正常完成

@@ -32,6 +32,7 @@ import {
   type CumulativeActiveState,
 } from '../domain/cumulativeScope';
 import { isCumulativeTask } from '../domain/derivedState';
+import { sortTasksByOrder } from '../domain/taskOrder';
 import { calendarGameDate, scopeCalendar, type ScopeCalendar } from '../domain/scopeCalendar';
 import { coverageSlotFor, parseWeekdays, slotFor } from '../domain/occurrences';
 import {
@@ -384,8 +385,11 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
               }
               // UF-021：已到期短期单任务不再占用今日列表；无截止日期的不判过期。
               if (expired && !includeExpired) continue;
-              const tasks = data.task_definitions.filter(
-                (task) => task.orderId === order.id && task.periodId === null,
+              // 手动排序：展示顺序 = `sortOrder`（Dexie 的主键顺序不稳定，不能直接渲染）。
+              const tasks = sortTasksByOrder(
+                data.task_definitions.filter(
+                  (task) => task.orderId === order.id && task.periodId === null,
+                ),
               );
               const events = eventsOfOrder(
                 data,
@@ -472,8 +476,10 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             const calendar = scopeCalendar(period, order);
             const periodToday = calendarGameDate(calendar, now());
             if (periodToday < countPeriodServiceStart(period)) continue;
-            const periodTasks = data.task_definitions.filter(
-              (task) => task.orderId === order.id && task.periodId === period.id,
+            const periodTasks = sortTasksByOrder(
+              data.task_definitions.filter(
+                (task) => task.orderId === order.id && task.periodId === period.id,
+              ),
             );
             const taskIds = new Set(periodTasks.map((task) => task.id));
             const occurrences = occurrencesOfOrder(data, taskIds);
@@ -579,8 +585,10 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           }
           if (today < period.startDate) continue;
 
-          const periodTasks = data.task_definitions.filter(
-            (task) => task.orderId === order.id && task.periodId === period.id,
+          const periodTasks = sortTasksByOrder(
+            data.task_definitions.filter(
+              (task) => task.orderId === order.id && task.periodId === period.id,
+            ),
           );
           const taskIds = new Set(periodTasks.map((task) => task.id));
           const occurrences = occurrencesOfOrder(data, taskIds);

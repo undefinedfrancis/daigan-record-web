@@ -205,3 +205,33 @@ export function IconLock(props: IconProps) {
     </svg>
   );
 }
+
+/** 拖拽手柄：两列小圆点，移动端一眼能看出「按住这里可以拖」。 */
+export function IconGrip(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="9" cy="7" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="7" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="17" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="17" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconArrowUp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 19V5M6 11l6-6 6 6" />
+    </svg>
+  );
+}
+
+export function IconArrowDown(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5v14M18 13l-6 6-6-6" />
+    </svg>
+  );
+}

@@ -9,6 +9,7 @@ import {
 } from '../../components/ui';
 import { IconClipboard, IconList, IconPlus, IconSettings, IconWallet } from '../../components/icons';
 import { MonthDayInputs } from '../../components/MonthDayInputs';
+import { SortableList } from '../../components/SortableList';
 import { toAppError } from '../../contracts/errors';
 import type {
   OrderDetailView,
@@ -408,12 +409,27 @@ export function OrderEditForm({
             {group.items.length === 0 ? (
               <p className="muted">还没有任务，请添加。</p>
             ) : (
-              <ul className="mt-2 flex flex-col gap-2">
-                {group.items.map((task) => (
+              <SortableList
+                items={group.items}
+                keyOf={(task) => task.key}
+                labelOf={(task) => task.title || '未命名任务'}
+                testId={`edit-sort-${group.periodId ?? 'short'}`}
+                listClassName="mt-2 gap-2"
+                onReorder={(orderedKeys) => {
+                  const byKey = new Map(group.items.map((item) => [item.key, item]));
+                  updateGroup(
+                    group.periodId,
+                    orderedKeys
+                      .map((key) => byKey.get(key))
+                      .filter((item): item is EditTaskItem => Boolean(item)),
+                  );
+                }}
+                renderItem={(task, control) => (
                   <TaskDraftRow
                     key={task.key}
                     task={task}
                     allowOneTime={!hosting}
+                    sortControl={control}
                     onChange={(patch) =>
                       updateGroup(
                         group.periodId,
@@ -429,11 +445,11 @@ export function OrderEditForm({
                       )
                     }
                   />
-                ))}
-              </ul>
+                )}
+              />
             )}
             <p className="mt-2 text-xs text-ink-soft">
-              已有打卡或截图记录的任务不能删除；改排期后历史记录保留。
+              已有打卡或截图记录的任务不能删除；改排期后历史记录保留。这里的顺序就是今日事项的显示顺序。
             </p>
           </div>
         ))}

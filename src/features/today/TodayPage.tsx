@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, EmptyState, ErrorText, Select, TextInput, useToast } from '../../components/ui';
-import { IconCamera, IconCheck, IconChevronRight, IconRefresh } from '../../components/icons';
+import {
+  IconArrowDown,
+  IconArrowUp,
+  IconCamera,
+  IconCheck,
+  IconChevronRight,
+  IconGrip,
+  IconRefresh,
+} from '../../components/icons';
+import { SortableList, type SortableItemControl } from '../../components/SortableList';
 import { COLOR_SWATCHES, ColorTagPicker, colorHexOf } from '../../components/ColorTagPicker';
 import { useApp } from '../../app/ServiceProvider';
 import { useQuery } from '../../app/useQuery';
@@ -60,6 +69,7 @@ function TaskRow({
   // UF-018/026：紧凑待办行；UF-019：色块标记便于分组查找。
   return (
     <li
+      data-testid="today-task-row"
       className="flex items-center gap-2 border-b border-line/60 py-0.5 pl-1 last:border-b-0"
       style={stripe ? { borderLeft: `3px solid ${stripe}` } : undefined}
     >
@@ -159,6 +169,66 @@ function TaskRow({
   );
 }
 
+/** 条目在列表里的稳定键：计次托管的同一次轮次用 occurrenceId 区分。 */
+function itemKey(item: TodayTaskItem): string {
+  return item.occurrenceId ?? item.taskId;
+}
+
+/**
+ * 排序模式下的紧凑行。
+ *
+ * 只留手柄、序号、标题与上/下移按钮：拖动时不会误触打卡、数值输入与截图上传，
+ * 也把宽度让给手柄，窄屏下不至于挤成两行。
+ */
+function SortRow({ item, control }: { item: TodayTaskItem; control: SortableItemControl }) {
+  return (
+    <li
+      {...control.itemProps}
+      data-testid="today-sort-row"
+      className={`flex items-center gap-1 rounded-lg border px-1 ${
+        control.dragging ? 'border-sage-deep/40 bg-sage-soft' : 'border-transparent'
+      }`}
+    >
+      <button
+        type="button"
+        {...control.handleProps}
+        className="flex h-8 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-ink-soft"
+        style={{ touchAction: 'none' }}
+      >
+        <IconGrip size={16} />
+      </button>
+      <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-ink-soft">
+        {control.index + 1}
+      </span>
+      <span
+        data-testid="today-sort-title"
+        className={`min-w-0 flex-1 truncate text-sm ${item.completed ? 'text-ink-soft line-through' : ''}`}
+        title={item.title}
+      >
+        {item.title}
+      </span>
+      <Button
+        variant="ghost"
+        aria-label={`${item.title} 上移`}
+        disabled={!control.canMoveUp}
+        style={{ minHeight: 28, minWidth: 28, padding: '0 4px' }}
+        onClick={control.moveUp}
+      >
+        <IconArrowUp size={14} />
+      </Button>
+      <Button
+        variant="ghost"
+        aria-label={`${item.title} 下移`}
+        disabled={!control.canMoveDown}
+        style={{ minHeight: 28, minWidth: 28, padding: '0 4px' }}
+        onClick={control.moveDown}
+      >
+        <IconArrowDown size={14} />
+      </Button>
+    </li>
+  );
+}
+
 /** 单个订单的任务组：可折叠，组头带「整单完成」勾选。 */
 function OrderGroup({
   group,
@@ -169,6 +239,7 @@ function OrderGroup({
   onSaveValue,
   onUpload,
   onColor,
+  onReorder,
   onSetWhole,
   dateLabel,
 }: {
@@ -180,6 +251,8 @@ function OrderGroup({
   onSaveValue: (item: TodayTaskItem, value: string) => void;
   onUpload: (item: TodayTaskItem, files: File[]) => void;
   onColor: (item: TodayTaskItem, color: string | null) => void;
+  /** 手动排序：提交的是本卡片里可见条目的 taskId 顺序。 */
+  onReorder: (orderedTaskIds: string[]) => void;
   /** true = 整单完成，false = 整单取消完成。 */
   onSetWhole: (completed: boolean) => void;
   /** 组头短日期（`10月27日 周二`）：单张卡片截图给老板也能看出是哪天。 */
@@ -189,8 +262,10 @@ function OrderGroup({
   const allDone = group.items.length > 0 && doneCount === group.items.length;
   const someDone = doneCount > 0 && !allDone;
   const first = group.items[0];
+  /** 排序模式：进入后行内只留手柄与上/下移，避免拖动时误触打卡控件。 */
+  const [sorting, setSorting] = useState(false);
   return (
-    <div className="rounded-2xl border border-line bg-white/60 px-3 py-2">
+    <div data-testid="today-order-card" className="rounded-2xl border border-line bg-white/60 px-3 py-2">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pb-1">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
           <Button
@@ -246,48 +321,88 @@ function OrderGroup({
               : ''}
           </span>
         </div>
-        <label
-          className="flex min-h-[32px] shrink-0 cursor-pointer items-center gap-1.5 text-xs"
-          title="勾选后本单今日事项全部完成；取消勾选整单回退"
-        >
-          <input
-            type="checkbox"
-            className="sr-only"
-            checked={allDone}
-            disabled={busy || group.items.length === 0}
-            ref={(element) => {
-              if (element) element.indeterminate = someDone;
-            }}
-            onChange={(event) => onSetWhole(event.target.checked)}
-            aria-label={`${group.title} 整单完成`}
-          />
-          <span
-            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
-              allDone
-                ? 'border-sage-deep bg-sage text-[#1f3a2a]'
-                : someDone
-                  ? 'border-sage-deep/60 bg-white text-ink-soft'
-                  : 'border-line bg-white'
-            }`}
+        <div className="flex shrink-0 items-center gap-1">
+          {group.items.length > 1 ? (
+            <Button
+              variant="ghost"
+              aria-pressed={sorting}
+              aria-label={sorting ? `结束「${group.title}」排序` : `调整「${group.title}」任务顺序`}
+              style={{ minHeight: 28, padding: '0 6px', fontSize: 12 }}
+              disabled={busy}
+              onClick={() => setSorting((current) => !current)}
+            >
+              {sorting ? '完成' : '排序'}
+            </Button>
+          ) : null}
+          <label
+            className="flex min-h-[32px] shrink-0 cursor-pointer items-center gap-1.5 text-xs"
+            title="勾选后本单今日事项全部完成；取消勾选整单回退"
           >
-            {allDone ? <IconCheck size={13} /> : someDone ? '–' : null}
-          </span>
-          <span className="text-ink-soft">整单完成</span>
-        </label>
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={allDone}
+              disabled={busy || group.items.length === 0}
+              ref={(element) => {
+                if (element) element.indeterminate = someDone;
+              }}
+              onChange={(event) => onSetWhole(event.target.checked)}
+              aria-label={`${group.title} 整单完成`}
+            />
+            <span
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                allDone
+                  ? 'border-sage-deep bg-sage text-[#1f3a2a]'
+                  : someDone
+                    ? 'border-sage-deep/60 bg-white text-ink-soft'
+                    : 'border-line bg-white'
+              }`}
+            >
+              {allDone ? <IconCheck size={13} /> : someDone ? '–' : null}
+            </span>
+            <span className="text-ink-soft">整单完成</span>
+          </label>
+        </div>
       </div>
       {!collapsed ? (
-        <ul>
-          {group.items.map((item) => (
-            <TaskRow
-              key={item.occurrenceId ?? item.taskId}
-              item={item}
-              onToggle={() => onToggleItem(item)}
-              onColor={(color) => onColor(item, color)}
-              onSaveValue={(value) => onSaveValue(item, value)}
-              onUpload={(files) => onUpload(item, files)}
+        sorting ? (
+          <>
+            <SortableList
+              items={group.items}
+              keyOf={itemKey}
+              labelOf={(item) => item.title}
+              disabled={busy}
+              testId={`today-sort-${group.orderId}`}
+              onReorder={(orderedKeys) => {
+                const taskIdByKey = new Map(
+                  group.items.map((item) => [itemKey(item), item.taskId]),
+                );
+                onReorder(
+                  orderedKeys
+                    .map((key) => taskIdByKey.get(key))
+                    .filter((id): id is string => Boolean(id)),
+                );
+              }}
+              renderItem={(item, control) => <SortRow item={item} control={control} />}
             />
-          ))}
-        </ul>
+            <p className="pt-1 text-[11px] leading-tight text-ink-soft">
+              拖动手柄或点上、下箭头调整顺序，松手即保存（安卓端按同一顺序显示）。
+            </p>
+          </>
+        ) : (
+          <ul>
+            {group.items.map((item) => (
+              <TaskRow
+                key={itemKey(item)}
+                item={item}
+                onToggle={() => onToggleItem(item)}
+                onColor={(color) => onColor(item, color)}
+                onSaveValue={(value) => onSaveValue(item, value)}
+                onUpload={(files) => onUpload(item, files)}
+              />
+            ))}
+          </ul>
+        )
       ) : null}
     </div>
   );
@@ -514,6 +629,19 @@ export function TodayPage() {
 
   async function setTaskColor(item: TodayTaskItem, color: string | null) {
     await run(() => services.tasks.setTaskColor(item.taskId, color, token));
+  }
+
+  /**
+   * 手动排序（2026-10-27 用户反馈）。
+   *
+   * 只提交这张卡片里**看得见**的条目顺序：服务层按槽位重排，今天不显示的任务
+   * （未到生效日、期次外、已移除）不会被挤到别处或撞号。
+   */
+  async function reorderGroupTasks(group: OrderGroupModel, orderedTaskIds: string[]) {
+    if (orderedTaskIds.length < 2) return;
+    await run(() =>
+      services.tasks.reorderTasks({ orderId: group.orderId, orderedTaskIds }, token),
+    );
   }
 
   // 折叠状态在提交后写入本地记忆：setState 的 updater 必须是纯函数（StrictMode 会重复调用）。
@@ -820,6 +948,7 @@ export function TodayPage() {
                   onSaveValue={saveValue}
                   onUpload={upload}
                   onColor={(item, color) => setTaskColor(item, color)}
+                  onReorder={(orderedTaskIds) => reorderGroupTasks(group, orderedTaskIds)}
                   onSetWhole={(completed) => setWhole(group, completed)}
                   dateLabel={shortDateLabel}
                 />
@@ -850,6 +979,7 @@ export function TodayPage() {
                   onSaveValue={saveValue}
                   onUpload={upload}
                   onColor={(item, color) => setTaskColor(item, color)}
+                  onReorder={(orderedTaskIds) => reorderGroupTasks(group, orderedTaskIds)}
                   onSetWhole={(completed) => setWhole(group, completed)}
                   dateLabel={shortDateLabel}
                 />

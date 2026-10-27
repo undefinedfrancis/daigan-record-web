@@ -18,6 +18,7 @@ import { compareDecimal, parseDecimal } from '../domain/decimal';
 import { gameDateAt, isISODate } from '../domain/gameCalendar';
 import { periodScheduleEnd, slotFor } from '../domain/occurrences';
 import { reachedTarget, resolveScopeTotal } from '../domain/progressEvents';
+import { applyVisibleOrder } from '../domain/taskOrder';
 import type { DatasetRuntime, DatasetToken, WriteContext } from '../storage/datasetRuntime';
 import { colourTokenToArgb } from '../backup/normalize/localColours';
 import type {
@@ -947,6 +948,40 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
         const task = ctx.data.task_definitions.find((row) => row.id === taskId);
         if (!task) throw new AppError('NOT_FOUND', '任务不存在');
         await ctx.table('task_definitions').put({ ...task, colorArgb: argb });
+      });
+    },
+
+    /**
+     * 手动排序（2026-10-27 用户反馈）：把页面看到的条目顺序写回 `sortOrder`。
+     *
+     * `orderedTaskIds` 只是**本次可见**的条目（今日事项只列今天该做的任务）。
+     * 重排用 `applyVisibleOrder` 的槽位语义，隐藏任务不会被挤走或撞号，
+     * 安卓端按 `ORDER BY sortOrder, id` 读取也能得到同一个顺序。
+     */
+    async reorderTasks(
+      input: { orderId: string; orderedTaskIds: string[] },
+      token: DatasetToken,
+    ): Promise<void> {
+      if (input.orderedTaskIds.length === 0) return;
+      await runtime.write(token, async (ctx) => {
+        const order = assertOrderWritable(ctx.data, input.orderId);
+        const roster = ctx.data.task_definitions.filter((row) => row.orderId === order.id);
+        const ids = new Set(roster.map((row) => row.id));
+        const seen = new Set<string>();
+        for (const id of input.orderedTaskIds) {
+          if (!ids.has(id)) {
+            throw new AppError('INVALID_INPUT', '排序清单里有不属于该订单的任务');
+          }
+          if (seen.has(id)) throw new AppError('INVALID_INPUT', '排序清单里有重复的任务');
+          seen.add(id);
+        }
+        const nowStamp = now();
+        const next = applyVisibleOrder(roster, input.orderedTaskIds);
+        for (let index = 0; index < next.length; index += 1) {
+          const row = next[index];
+          if (row.sortOrder === index) continue;
+          await ctx.table('task_definitions').put({ ...row, sortOrder: index, updatedAt: nowStamp });
+        }
       });
     },
 
