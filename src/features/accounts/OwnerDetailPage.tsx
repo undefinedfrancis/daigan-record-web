@@ -21,6 +21,7 @@ import type { AccountSummary } from '../../application/contracts';
 import type { CascadeCounts } from '../../application/cascade';
 import { AccountForm } from './AccountForm';
 import { OrderEditor } from '../orders/OrderEditor';
+import { expiryToneClass, orderExpiryBadge } from '../orders/orderExpiry';
 
 /** 一个游戏账号一个独立模块：上半「游戏账号信息」，下半「该账号对应订单」。 */
 function AccountModule({
@@ -141,35 +142,41 @@ function AccountModule({
           <p className="muted">该账号还没有订单，点右上角「新增订单」即可下单。</p>
         ) : (
           <ul className="divide-y divide-line">
-            {orders.map((order) => (
-              <li key={order.id}>
-                <button
-                  type="button"
-                  className="flex min-h-[52px] w-full items-center gap-2 py-2 text-left"
-                  onClick={() => navigate(`/orders/${order.id}`)}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{order.title}</span>
-                    <span className="block text-xs text-ink-soft">
-                      {order.currentServiceCount != null
-                        ? `按次数 ${order.currentServiceCount} 次`
-                        : order.currentPeriodEnd
-                          ? `至 ${order.currentPeriodEnd}`
-                          : ''}
-                      {order.deadlineDate ? ` · 截止 ${order.deadlineDate}` : ''}
-                      {order.paidCents > 0 ? ` · 已收 ¥${formatMoney(order.paidCents)}` : ''}
+            {orders.map((order) => {
+              const expiry = orderExpiryBadge(order);
+              return (
+                <li key={order.id}>
+                  <button
+                    type="button"
+                    className="flex min-h-[52px] w-full items-center gap-2 py-2 text-left"
+                    onClick={() => navigate(`/orders/${order.id}`)}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{order.title}</span>
+                      <span className="block text-xs text-ink-soft">
+                        {order.currentServiceCount != null
+                          ? `按次数 ${order.currentServiceCount} 次`
+                          : order.currentPeriodEnd
+                            ? `至 ${order.currentPeriodEnd}`
+                            : ''}
+                        {expiry ? (
+                          <span className={expiryToneClass(expiry.tone)}> · {expiry.label}</span>
+                        ) : null}
+                        {order.deadlineDate ? ` · 截止 ${order.deadlineDate}` : ''}
+                        {order.paidCents > 0 ? ` · 已收 ¥${formatMoney(order.paidCents)}` : ''}
+                      </span>
                     </span>
-                  </span>
-                  {order.cancelled ? (
-                    <Badge tone="danger">已作废</Badge>
-                  ) : order.outstandingCents > 0 ? (
-                    <Badge tone="warn">待收 ¥{formatMoney(order.outstandingCents)}</Badge>
-                  ) : (
-                    <Badge>已结清</Badge>
-                  )}
-                </button>
-              </li>
-            ))}
+                    {order.cancelled ? (
+                      <Badge tone="danger">已作废</Badge>
+                    ) : order.outstandingCents > 0 ? (
+                      <Badge tone="warn">待收 ¥{formatMoney(order.outstandingCents)}</Badge>
+                    ) : (
+                      <Badge>已结清</Badge>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

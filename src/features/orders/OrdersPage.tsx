@@ -19,6 +19,7 @@ import { toAppError } from '../../contracts/errors';
 import type { OrderSummary } from '../../application/contracts';
 import type { OrderType } from '../../contracts/tables';
 import { OrderEditor } from './OrderEditor';
+import { expiryToneClass, orderExpiryBadge } from './orderExpiry';
 
 export function OrdersPage() {
   const { services, token } = useApp();
@@ -130,6 +131,7 @@ export function OrdersPage() {
               .filter((order) => !colorFilter || order.colorTag === colorFilter)
               .map((order) => {
                 const stripe = colorHexOf(order.colorTag);
+                const expiry = orderExpiryBadge(order);
                 return (
                   <li
                     key={order.id}
@@ -153,13 +155,16 @@ export function OrdersPage() {
                           {order.cancelled ? <Badge tone="danger">已作废</Badge> : null}
                           {!order.cancelled && order.completed ? <Badge>已完成</Badge> : null}
                         </span>
-                        <span className="mt-0.5 block truncate text-xs text-ink-soft">
+                        <span className="mt-0.5 block text-xs text-ink-soft">
                           {order.ownerName} · {order.accountName}
                           {order.currentServiceCount != null
                             ? ` · 按次数 ${order.currentServiceCount} 次`
                             : order.currentPeriodEnd
                               ? ` · 至 ${order.currentPeriodEnd}`
                               : ''}
+                          {expiry ? (
+                            <span className={expiryToneClass(expiry.tone)}> · {expiry.label}</span>
+                          ) : null}
                           {order.deadlineDate ? ` · 截止 ${order.deadlineDate}` : ''}
                         </span>
                       </span>

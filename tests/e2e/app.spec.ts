@@ -157,6 +157,57 @@ test('弹窗昵称逐键输入不失焦（新建与改昵称）', async ({ page 
   await expect(page.getByRole('heading', { name: '花生酱' })).toBeVisible();
 });
 
+/** 与业务同口径的「今天」：订单时区 Asia/Shanghai + 默认 05:00 刷新。 */
+function gameToday(refreshMinutes = 300): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const pick = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? '0');
+  const base = Date.UTC(pick('year'), pick('month') - 1, pick('day'));
+  const beforeRefresh = pick('hour') * 60 + pick('minute') < refreshMinutes;
+  return new Date(base - (beforeRefresh ? 86_400_000 : 0)).toISOString().slice(0, 10);
+}
+
+function shiftDate(dateStr: string, days: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+test('老板页订单日期后显示剩余到期天数', async ({ page }) => {
+  const today = gameToday();
+  const end = shiftDate(today, 40);
+
+  await page.goto('/');
+  await createOwner(page, '到期老板');
+  await createAccount(page);
+
+  await page.getByRole('button', { name: '下单' }).click();
+  const editor = page.getByRole('dialog', { name: '新建订单' });
+  await editor.getByLabel('订单标题').fill('四十天托管');
+  await editor.getByLabel('服务模式').selectOption('dates');
+  await editor.getByLabel('开始日期').fill(today);
+  await editor.getByLabel('结束日期').fill(end);
+  await editor.getByLabel('本期价格（元）').fill('200');
+  await editor.getByRole('checkbox').uncheck();
+  await editor.getByRole('button', { name: '添加任务' }).click();
+  await editor.getByLabel('任务标题').fill('每日签到');
+  await editor.getByRole('button', { name: '创建订单' }).click();
+  await expect(page.getByRole('heading', { name: '四十天托管' })).toBeVisible();
+
+  // 订单行：至 结束日 · 剩 N 天，N 与日历天数一致（首尾相减，不含起始当天）。
+  await openOwners(page);
+  await page.getByText('到期老板').first().click();
+  const row = page.getByRole('button', { name: /四十天托管/ });
+  await expect(row).toContainText(`至 ${end}`);
+  await expect(row).toContainText(`剩 40 天`);
+});
+
 test('PWA：manifest 可访问、Service Worker 注册且断网可打开', async ({ page, context }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '今日事项' })).toBeVisible();
