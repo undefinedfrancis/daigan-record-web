@@ -19,7 +19,13 @@ import {
 } from '../domain/ledger';
 import { argbToColourToken } from '../backup/normalize/localColours';
 import { legacyModeFromServiceDefaults } from '../backup/normalize/categoryDefaults';
-import { countServiceDaysUsed, gameDateAt, localDateAt, monthRange } from '../domain/gameCalendar';
+import {
+  countServiceDaysUsed,
+  diffDays,
+  gameDateAt,
+  localDateAt,
+  monthRange,
+} from '../domain/gameCalendar';
 import { countPeriodServiceStart, resolveActiveCountSession } from '../domain/countSessions';
 import {
   roundDueTasks,
@@ -54,6 +60,7 @@ import type {
   ActiveCountSummary,
   CumulativeTaskView,
   HistoricalTaskView,
+  HostingStatus,
   LedgerView,
   OrderDetailView,
   OrderSummary,
@@ -119,6 +126,20 @@ function effectivePeriod(data: BackupDataSet, order: OrderRow, nowMs: number) {
   return containing ?? desc[0];
 }
 
+/**
+ * 期次相对"今天"的派生状态（与安卓 `HostingStatus` 同一口径）。
+ *
+ * "今天"必须用**期次自己的**刷新快照换算；按次数期次没有日历期限（起止只是内部锚点），
+ * 永远不会因为锚点日过去而变成"已到期"。
+ */
+function periodStatusAt(period: HostingPeriodRow, order: OrderRow, nowMs: number): HostingStatus {
+  if (period.serviceCount != null) return 'ACTIVE';
+  const today = calendarGameDate(scopeCalendar(period, order), nowMs);
+  if (today < period.startDate) return 'NOT_STARTED';
+  if (today > period.endDate) return 'EXPIRED';
+  return 'ACTIVE';
+}
+
 function isArchivedOrder(data: BackupDataSet, order: OrderRow): boolean {
   if (order.archivedAt !== null) return true;
   const { owner, account } = namesOf(data, order);
@@ -135,6 +156,7 @@ function summaryOf(
   const { owner, account } = namesOf(data, order);
   const periods = data.hosting_periods.filter((period) => period.orderId === order.id);
   const latest = periods.sort((left, right) => right.periodIndex - left.periodIndex)[0];
+  const effective = order.type === 'HOSTING' ? effectivePeriod(data, order, nowMs) : null;
   const price = order.type === 'SHORT_TASK' ? (order.priceCents ?? 0) : (latest?.priceCents ?? 0);
   // 只把已经到账的收款算作已收：未来到账的在途款不冲抵待收。
   const paid =
@@ -159,6 +181,9 @@ function summaryOf(
     cancelled: order.cancelledAt !== null,
     completed: order.completedAt !== null,
     deadlineDate: order.deadlineDate,
+    // 开始日取“今天所在期次”：提前续期时最新期次在未来，不能拿它判断是否已开始。
+    currentPeriodStart:
+      effective && effective.serviceCount == null ? effective.startDate : null,
     // 按次数期次无日历期限：不展示结束日，改展示服务次数。
     currentPeriodEnd: latest && latest.serviceCount == null ? latest.endDate : null,
     currentServiceCount: latest?.serviceCount ?? null,
@@ -335,6 +360,8 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
         /** 今天不触发、但仍在周期窗口内的任务（只读展示 + 可补录到触发日）。 */
         const periodic: TodayTaskItem[] = [];
         const staleOrders: TodayView['staleOrders'] = [];
+        /** 预定中（期次尚未开始）的托管单：今天没有任务，但要明确告知。 */
+        const upcoming: TodayView['upcoming'] = [];
         const includeExpired = filter.includeExpired === true;
         // 任务颜色 = 自身 colorArgb ?? 订单色（继承），不再有独立的"跟随标记"表。
         const orderColorById = new Map<string, string | null>(
@@ -636,7 +663,26 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
             // UF-021：到期后（结束日次日起）隐藏其任务；到期当天正常显示。
             if (!includeExpired) continue;
           }
-          if (today < period.startDate) continue;
+          if (today < period.startDate) {
+            // 预订单：期次还没开始，今天不产生任务，但绝不能静默消失。
+            const plannedTasks = data.task_definitions.filter(
+              (task) =>
+                task.orderId === order.id &&
+                task.periodId === period.id &&
+                task.retiredAt === null,
+            );
+            upcoming.push({
+              orderId: order.id,
+              title: order.title,
+              ownerName: base.ownerName,
+              accountName: base.accountName,
+              startDate: period.startDate,
+              endDate: period.endDate,
+              taskCount: plannedTasks.length,
+              daysUntilStart: diffDays(today, period.startDate),
+            });
+            continue;
+          }
 
           const periodTasks = sortTasksByOrder(
             data.task_definitions.filter(
@@ -774,6 +820,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           shortTasks,
           periodic,
           staleOrders,
+          upcoming,
         };
       });
     },
@@ -1188,6 +1235,8 @@ async function orderDetailOf(
   const sessions = sessionsOfOrder(data, order.id);
   const today = gameDateAt(nowMs, order.gameZoneId, order.dailyRefreshMinutes);
   const countPeriods = periods.filter((period) => period.serviceCount !== null);
+  /** 今天所在期次（无则最近一期）：订单级"未开始"状态的判定依据。 */
+  const effectivePeriodRow = periods.length > 0 ? effectivePeriod(data, order, nowMs) : null;
   const active: ActiveCountSummary =
     countPeriods.length > 0
       ? activeSummaryOf(resolveActiveCountSession(order.id, periods, sessions))
@@ -1224,6 +1273,7 @@ async function orderDetailOf(
       serviceDaysRemaining: serviceDays !== null ? Math.max(0, serviceDays - used) : 0,
       serviceCount,
       serviceRounds: serviceCount !== null ? completedSessionsOf(data, period.id) : 0,
+      status: periodStatusAt(period, order, nowMs),
     };
   });
 
@@ -1444,6 +1494,8 @@ async function orderDetailOf(
     activeCount: active,
     cumulative: cumulativeViews,
     historicalTasks,
+    // 今天所在期次的状态；`NOT_STARTED` 表示预订单（任务尚未生效）。
+    status: effectivePeriodRow ? periodStatusAt(effectivePeriodRow, order, nowMs) : null,
   };
 }
 

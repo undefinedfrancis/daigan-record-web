@@ -380,7 +380,10 @@ export function OrderEditor({
                 </Select>
               </Field>
               {serviceMode !== 'count' ? (
-                <Field label="开始日期">
+                <Field
+                  label="开始日期"
+                  hint="可以填未来日期做预订单：开始前不出现在今日事项，也不会生成打卡"
+                >
                   <TextInput
                     type="date"
                     value={startDate}

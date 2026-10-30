@@ -154,6 +154,7 @@ export function OrdersPage() {
                           <Badge>{order.type === 'HOSTING' ? '托管' : '短期'}</Badge>
                           {order.cancelled ? <Badge tone="danger">已作废</Badge> : null}
                           {!order.cancelled && order.completed ? <Badge>已完成</Badge> : null}
+                          {expiry?.notStarted ? <Badge>未开始</Badge> : null}
                         </span>
                         <span className="mt-0.5 block text-xs text-ink-soft">
                           {order.ownerName} · {order.accountName}

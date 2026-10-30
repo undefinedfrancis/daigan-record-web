@@ -28,6 +28,7 @@ function order(patch: Partial<OrderSummary> = {}): OrderSummary {
     cancelled: false,
     completed: false,
     deadlineDate: null,
+    currentPeriodStart: '2026-10-01',
     currentPeriodEnd: '2026-12-27',
     currentServiceCount: null,
     createdAt: Date.UTC(2026, 9, 1),
@@ -91,5 +92,29 @@ describe('订单行剩余天数（按订单自己的游戏日）', () => {
   it('过期订单给出红色提示', () => {
     const badge = orderExpiryBadge(order(), Date.UTC(2027, 0, 5, 4, 0));
     expect(badge).toMatchObject({ tone: 'danger', label: '已过期 9 天' });
+  });
+});
+
+describe('预订（期次尚未开始）', () => {
+  const preorder = order({
+    currentPeriodStart: '2026-11-05',
+    currentPeriodEnd: '2026-12-04',
+  });
+  // 上海 2026-10-29 12:00 → 游戏日 2026-10-29。
+  const NOW_MS = Date.UTC(2026, 9, 29, 4, 0);
+
+  it('说「预定 X 开始 · 距开始 N 天」，不再用剩余天数误导', () => {
+    const badge = orderExpiryBadge(preorder, NOW_MS);
+    expect(badge).toMatchObject({ notStarted: true, tone: 'info', daysLeft: 7 });
+    expect(badge?.label).toBe('预定 2026-11-05 开始 · 距开始 7 天');
+  });
+
+  it('开始当天恢复正常「剩 N 天」口径', () => {
+    const badge = orderExpiryBadge(preorder, Date.UTC(2026, 10, 5, 4, 0));
+    expect(badge).toMatchObject({ notStarted: false, label: '剩 29 天' });
+  });
+
+  it('未开始的配色用绿色系，不与临期/过期混淆', () => {
+    expect(expiryToneClass('info')).toBe('text-sage-deep');
   });
 });

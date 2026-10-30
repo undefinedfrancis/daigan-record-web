@@ -294,7 +294,10 @@ export function OrderEditForm({
                     </Select>
                   </Field>
                   {period.serviceMode !== 'count' ? (
-                    <Field label="开始日期">
+                    <Field
+                      label="开始日期"
+                      hint="可填未来日期做预订单；开始前不生成今日任务，也不能提前打卡"
+                    >
                       <TextInput
                         type="date"
                         value={period.startDate}

@@ -912,6 +912,34 @@ export function TodayPage() {
         </Card>
       ) : null}
 
+      {today.data && today.data.upcoming.length > 0 ? (
+        <Card>
+          <div className="section-title">
+            <h2>预定中 · 未开始</h2>
+            <span className="muted">{today.data.upcoming.length} 单</span>
+          </div>
+          <ul className="flex flex-col gap-2">
+            {today.data.upcoming.map((item) => (
+              <li
+                key={item.orderId}
+                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate">{item.title}</span>
+                  <span className="block text-xs text-ink-soft">
+                    {item.ownerName} · {item.accountName} · {item.startDate} 开始（距开始{' '}
+                    {item.daysUntilStart} 天）· {item.taskCount} 个任务
+                  </span>
+                </span>
+                <Button variant="ghost" onClick={() => navigate(`/orders/${item.orderId}`)}>
+                  查看
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
       <div className="grid items-start gap-3 lg:grid-cols-2">
         <Card>
           <div className="section-title">

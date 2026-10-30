@@ -411,6 +411,25 @@ export interface TodayView {
    */
   periodic: TodayTaskItem[];
   staleOrders: { orderId: string; title: string; reason: string }[];
+  /**
+   * 预定中（期次尚未开始）的托管单：今天没有任务，但要明确告知，
+   * 不能让订单在今日事项里"静默消失"。
+   */
+  upcoming: UpcomingOrderView[];
+}
+
+export interface UpcomingOrderView {
+  orderId: string;
+  title: string;
+  ownerName: string;
+  accountName: string;
+  /** 该期次开始日（ISO）。 */
+  startDate: string;
+  endDate: string;
+  /** 开始后才会生效的任务数（已移除任务不计）。 */
+  taskCount: number;
+  /** 距开始天数（> 0）。 */
+  daysUntilStart: number;
 }
 
 export interface OwnerSummary {
@@ -492,6 +511,14 @@ export interface OrderSummary {
   cancelled: boolean;
   completed: boolean;
   deadlineDate: string | null;
+  /**
+   * 「今天」所在期次的开始日（无包含今天的期次时取最近一期）。
+   *
+   * 预订单（未来才开始）靠它派生"未开始"；按次数期次没有日历期限，固定为 null。
+   * 与 `currentPeriodEnd`（最新期次）刻意区分：提前续期时最新期次在未来，
+   * 不能用它判断"是否已开始"。
+   */
+  currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   /** 最新期次按次数服务的总次数；null 表示按日期/工作日模式。 */
   currentServiceCount: number | null;
@@ -518,6 +545,14 @@ export interface TemplateSummary {
   taskCount: number;
 }
 
+/**
+ * 托管期次相对"今天"的状态（**派生值**，不落库、不进备份）。
+ *
+ * 与安卓 `HostingStatus` 同一口径：今天按期次自己的刷新快照换算；
+ * 按次数期次没有日历期限，恒为 `ACTIVE`。
+ */
+export type HostingStatus = 'NOT_STARTED' | 'ACTIVE' | 'EXPIRED';
+
 export interface PeriodView {
   id: string;
   periodIndex: number;
@@ -540,6 +575,8 @@ export interface PeriodView {
   serviceCount: number | null;
   /** 按次数模式：已完成轮次（一个游戏日整轮打卡算 1 次）；非按次数为 0。 */
   serviceRounds: number;
+  /** 该期次相对今天的派生状态：未开始 / 服务中 / 已到期。 */
+  status: HostingStatus;
 }
 
 export interface OrderDetailView {
@@ -555,6 +592,11 @@ export interface OrderDetailView {
   monthlyRefreshDays: string | null;
   account: AccountSummary | null;
   periods: PeriodView[];
+  /**
+   * 今天所在期次的状态（无期次为 null）。`NOT_STARTED` = 预订单：
+   * 任务还没生效，"今日未完成"这类当日口径不能显示。
+   */
+  status: HostingStatus | null;
   tasks: {
     id: string;
     title: string;

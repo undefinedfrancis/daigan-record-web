@@ -703,6 +703,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                 }}
               />
               <Badge>{order.type === 'HOSTING' ? '托管' : '短期单'}</Badge>
+              {data.status === 'NOT_STARTED' ? <Badge>未开始</Badge> : null}
               {order.cancelled ? <Badge tone="danger">已作废</Badge> : null}
               {order.completed ? <Badge>已完成</Badge> : null}
             </div>
@@ -787,6 +788,7 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                     ) : null}
                   </span>
                   <span className="flex items-center gap-2">
+                    {period.status === 'NOT_STARTED' ? <Badge>未开始</Badge> : null}
                     <span className="text-ink-soft">¥{formatMoney(period.priceCents)}</span>
                     {period.pendingCents > 0 ? (
                       <Badge>待到账 ¥{formatMoney(period.pendingCents)}</Badge>
@@ -895,7 +897,10 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                       <span className="text-xs">{task.attachmentCount}</span>
                     ) : null}
                   </Button>
-                  {task.cumulative ? (
+                  {data.status === 'NOT_STARTED' ? (
+                    // 预订单：任务还没生效，不能用"今日未完成"让人以为漏做。
+                    <Badge>未开始</Badge>
+                  ) : task.cumulative ? (
                     task.reachedTarget ? (
                       <Badge>已达标</Badge>
                     ) : (
@@ -1024,6 +1029,11 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
             </Button>
           </div>
         </div>
+        {data.status === 'NOT_STARTED' ? (
+          <p className="muted mb-2 text-xs">
+            本期尚未开始：日历只是预排，开始当天才会进入今日事项，之前不能打卡或补录。
+          </p>
+        ) : null}
         {data.calendar.length === 0 ? (
           <EmptyState title="本期还没有可执行的打卡项" />
         ) : (
