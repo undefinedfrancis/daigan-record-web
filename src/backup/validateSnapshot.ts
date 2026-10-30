@@ -27,6 +27,7 @@ import {
 import { countPeriodServiceStart } from '../domain/countSessions';
 import { parseDecimal } from '../domain/decimal';
 import { isISODate } from '../domain/gameCalendar';
+import { isSingleShotTask, ONCE_SLOT_PREFIX } from '../domain/occurrences';
 import { validateProgressEvents, type EventChainContext } from '../domain/progressEvents';
 
 export class ValidatedSnapshot {
@@ -161,6 +162,8 @@ function isCountPeriod(period: HostingPeriodRow): boolean {
 }
 
 function expectedOccurrencePrefix(task: TaskDefinitionRow, countBased: boolean): string {
+  // 托管「一次性」任务不占轮次号：无论按日期还是按次数，键都是 `O:<归属日>`。
+  if (isSingleShotTask(task)) return ONCE_SLOT_PREFIX;
   if (countBased) return 'N:';
   switch (task.recurrence) {
     case 'DAILY':
@@ -459,7 +462,8 @@ export function validateSnapshot(snapshot: Snapshot, options: ValidateOptions = 
       if (task.periodId === null) fail(`托管任务 ${task.id} 缺少归属期次`);
       const period = periodById.get(task.periodId);
       if (!period || period.orderId !== order.id) fail(`托管任务 ${task.id} 的期次不属于该订单`);
-      if (task.recurrence === 'ONE_TIME') fail(`托管任务 ${task.id} 不得使用一次性周期`);
+      // 普通一次性任务在托管期内允许（本期只做一次，见 `domain/occurrences.isSingleShotTask`）；
+      // 它不产生应做集，也不占轮次号。
       // 派生投影：重建（S2-R3）会把它写回 null，因此只在 candidate 阶段强制。
       if (!authoritativeOnly && task.completedAt !== null) {
         fail(`托管任务 ${task.id} 不应保存任务级完成时间`);
@@ -468,6 +472,8 @@ export function validateSnapshot(snapshot: Snapshot, options: ValidateOptions = 
   }
 
   const occurrenceKeyByTask = new Map<string, Set<string>>();
+  /** 一次性任务的已完成打卡次数：本期只允许一次。 */
+  const completedOnceByTask = new Map<string, number>();
   for (const occurrence of data.task_occurrences) {
     const task = taskById.get(occurrence.taskDefinitionId);
     if (!task) fail(`打卡记录 ${occurrence.id} 引用了不存在的任务`);
@@ -491,7 +497,20 @@ export function validateSnapshot(snapshot: Snapshot, options: ValidateOptions = 
     if (!occurrence.occurrenceKey.startsWith(prefix)) {
       fail(`打卡记录 ${occurrence.id} 的键前缀与任务周期不一致（期望 ${prefix}）`);
     }
-    if (countBased) {
+    if (isSingleShotTask(task)) {
+      // 一次性任务：`O:<归属日>`，归属日就是实际打卡日，不占轮次（计次期次也一样）。
+      if (task.periodId === null) fail(`短期单任务 ${task.id} 不应保存打卡记录`);
+      const datePart = occurrence.occurrenceKey.slice(prefix.length);
+      if (!isISODate(datePart)) fail(`打卡记录 ${occurrence.id} 的键日期无效：${datePart}`);
+      if (occurrence.gameDate !== datePart) {
+        fail(`打卡记录 ${occurrence.id} 的归属日与键不一致：${occurrence.gameDate} ≠ ${datePart}`);
+      }
+      if (occurrence.completedAt !== null) {
+        const completed = (completedOnceByTask.get(task.id) ?? 0) + 1;
+        if (completed > 1) fail(`一次性任务 ${task.id} 本期只能完成一次，却有 ${completed} 条已完成记录`);
+        completedOnceByTask.set(task.id, completed);
+      }
+    } else if (countBased) {
       const index = sessionIndexFromKey(occurrence.occurrenceKey);
       if (index === null) fail(`打卡记录 ${occurrence.id} 的轮次键无效`);
       const session = (sessionsByOrder.get(order.id) ?? []).find((row) => row.sessionIndex === index);

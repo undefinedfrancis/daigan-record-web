@@ -16,7 +16,7 @@ import {
 } from '../domain/countRounds';
 import { compareDecimal, parseDecimal } from '../domain/decimal';
 import { gameDateAt, isISODate } from '../domain/gameCalendar';
-import { periodScheduleEnd, slotFor } from '../domain/occurrences';
+import { isSingleShotTask, onceSlotFor, periodScheduleEnd, slotFor } from '../domain/occurrences';
 import { reachedTarget, resolveScopeTotal } from '../domain/progressEvents';
 import { applyVisibleOrder } from '../domain/taskOrder';
 import type { DatasetRuntime, DatasetToken, WriteContext } from '../storage/datasetRuntime';
@@ -150,6 +150,82 @@ async function writeOccurrence(
   await ctx.table('task_occurrences').add(row);
   ctx.data.task_occurrences.push(row);
   return row;
+}
+
+/** 该「一次性」任务本期已完成的打卡行（`O:` 行，本期最多一条）。 */
+function completedOnceOccurrence(
+  ctx: WriteContext,
+  task: TaskDefinitionRow,
+): TaskOccurrenceRow | null {
+  return (
+    ctx.data.task_occurrences.find(
+      (row) => row.taskDefinitionId === task.id && row.completedAt !== null,
+    ) ?? null
+  );
+}
+
+/**
+ * 托管「一次性」任务的写入校验与落库（本期只做一次，归属日 = 实际打卡日）。
+ *
+ * - 任意游戏日都可以打卡，但不得是未来日期，也不得早于期次服务起点；
+ * - 期次范围、任务生效起止日期与服务星期由 `onceSlotFor` 统一判定；
+ * - 已完成后再勾到**另一天**直接拒绝（先撤销再改日期），撤销本身落在同一条行上。
+ */
+async function writeOnceOccurrence(
+  ctx: WriteContext,
+  task: TaskDefinitionRow,
+  period: HostingPeriodRow,
+  input: { gameDate: string; completed: boolean; value: string | null; backfilled: boolean },
+  newId: () => string,
+  now: () => number,
+): Promise<void> {
+  const order = assertOrderWritable(ctx.data, task.orderId);
+  if (!isISODate(input.gameDate)) throw new AppError('INVALID_INPUT', '游戏日期不合法');
+  if (input.gameDate > accountGameDate(order, now())) {
+    throw new AppError('INVALID_INPUT', '不能为未来日期打卡');
+  }
+  const earliest = period.serviceCount !== null ? countPeriodServiceStart(period) : period.startDate;
+  if (input.gameDate < earliest) {
+    throw new AppError('INVALID_INPUT', `该日期早于服务起点 ${earliest}`);
+  }
+  const slot = onceSlotFor(task, period, input.gameDate);
+  if (!slot) throw new AppError('INVALID_INPUT', '该任务在这一天不需要执行');
+  const retired = retirementDate(task, order);
+  if (retired !== null && input.gameDate <= retired) {
+    const exists = ctx.data.task_occurrences.some((row) => row.taskDefinitionId === task.id);
+    if (!exists) {
+      throw new AppError('CONFLICT', '该任务已移除：只能更正已有的历史打卡，不能新增历史日期');
+    }
+  }
+  const done = completedOnceOccurrence(ctx, task);
+  if (done && input.completed && done.occurrenceKey !== slot.key) {
+    throw new AppError(
+      'CONFLICT',
+      `「${task.title}」本期只需做一次，已在 ${done.gameDate} 完成；如需改到别的日期请先撤销`,
+    );
+  }
+  await writeOccurrence(
+    ctx,
+    task,
+    slot,
+    (row) => ({
+      id: row?.id ?? '',
+      taskDefinitionId: task.id,
+      occurrenceKey: row?.occurrenceKey ?? '',
+      gameDate: row?.gameDate ?? slot.gameDate,
+      windowStart: null,
+      windowEnd: null,
+      completedAt: input.completed ? now() : null,
+      recordedAt: input.completed ? now() : null,
+      backfilled: input.backfilled || row?.backfilled === 1 ? 1 : 0,
+      completionBatchId: row?.completionBatchId ?? null,
+      value: input.value,
+      createdAt: row?.createdAt ?? now(),
+    }),
+    newId,
+    now,
+  );
+  await persistOrderDerived(ctx, order.id);
 }
 
 function occurrenceOfRound(
@@ -448,6 +524,15 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
           );
           for (const task of tasks) {
             if (task.retiredAt !== null) continue;
+            // 一次性任务本期做一次即可，哪天做都算：不属于"今天该做"的批量范围，避免误勾。
+            if (isSingleShotTask(task)) {
+              skipped.push({
+                taskId: task.id,
+                title: task.title,
+                reason: '一次性任务本期做一次即可，请在今日事项里单独勾选',
+              });
+              continue;
+            }
             const slot = slotFor(task, period, today);
             if (!slot) continue;
             const occurrence = ctx.data.task_occurrences.find(
@@ -620,6 +705,29 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
         const period = findPeriodOfTask(ctx, task);
         if (!period) throw new AppError('NOT_FOUND', '任务缺少所属期次');
         const order = assertOrderWritable(ctx.data, task.orderId);
+
+        // 托管「一次性」任务：本期只做一次，归属日 = 实际打卡日；按日期/按次数都走这里，
+        // 也绝不因为一次打卡就创建轮次行（它本来就不在应做集里）。
+        if (isSingleShotTask(task)) {
+          const value =
+            task.progressType === 'CHECKBOX' ? (input.completed ? '1' : null) : input.value;
+          if (task.progressType === 'NUMERIC' && value !== null) parseDecimal(value);
+          await writeOnceOccurrence(
+            ctx,
+            task,
+            period,
+            {
+              gameDate: input.gameDate,
+              completed: input.completed,
+              value,
+              backfilled: input.backfilled,
+            },
+            newId,
+            now,
+          );
+          return;
+        }
+
         if (period.serviceCount !== null) {
           assertRoundTaskWritable(ctx, task, period, input.gameDate, now());
           const existingIndex = existingRoundOfToday(ctx, task, input.gameDate);
@@ -766,6 +874,8 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
 
         let recorded = 0;
         const writtenDates = new Set<string>();
+        // 本批次里刚写入的一次性任务：后续日期不再重复，也不再重复提示"已完成"。
+        const onceWritten = new Set<string>();
         for (const date of dates) {
           // 历史补录要落在该日期实际所属的期次（续期后同一月可能横跨两期）。
           const period = periods
@@ -785,6 +895,45 @@ export function createTaskServices({ runtime, newId, now }: TaskDeps) {
             }
             if (isCumulativeTask(task)) {
               addSkip(task.id, task.title, '累计任务请到「累计进度」记录，不能按日期批量勾选');
+              continue;
+            }
+            if (isSingleShotTask(task)) {
+              // 一次性任务本期只记一次：取所选日期里最早的那天，其余日期静默跳过。
+              const done = completedOnceOccurrence(ctx, task);
+              if (done) {
+                if (!onceWritten.has(task.id)) {
+                  addSkip(task.id, task.title, `该一次性任务已于 ${done.gameDate} 完成，本期只记一次`);
+                }
+                continue;
+              }
+              const onceSlot = onceSlotFor(task, period, date);
+              if (!onceSlot) continue;
+              const onceValue =
+                task.progressType === 'CHECKBOX' ? '1' : numericCompletionValue(task, null);
+              await writeOccurrence(
+                ctx,
+                task,
+                onceSlot,
+                (row) => ({
+                  id: row?.id ?? '',
+                  taskDefinitionId: task.id,
+                  occurrenceKey: row?.occurrenceKey ?? '',
+                  gameDate: row?.gameDate ?? onceSlot.gameDate,
+                  windowStart: null,
+                  windowEnd: null,
+                  completedAt: nowStamp,
+                  recordedAt: nowStamp,
+                  backfilled: date < today ? 1 : 0,
+                  completionBatchId: row?.completionBatchId ?? null,
+                  value: onceValue,
+                  createdAt: row?.createdAt ?? nowStamp,
+                }),
+                newId,
+                now,
+              );
+              onceWritten.add(task.id);
+              recorded += 1;
+              writtenDates.add(date);
               continue;
             }
             const slot = slotFor(task, period, date);

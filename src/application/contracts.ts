@@ -384,6 +384,13 @@ export interface TodayTaskItem {
   gameDate: string;
   /** 权威日历快照：提交时按它在提交边界现算归属日，避免表单带着过期日期。 */
   calendar: ScopeCalendar;
+  /**
+   * 托管「一次性」任务（本期只做一次，哪天打卡都算）。
+   *
+   * 这类条目**不属于**每日应做集：完成即从今日事项消失，也不参与整单/全部完成的批量勾选。
+   * 缺省（undefined）读作 false，历史读取路径无需关心。
+   */
+  singleShot?: boolean;
 }
 
 export interface TodayView {

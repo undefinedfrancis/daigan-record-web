@@ -313,16 +313,17 @@ describe('F-02 未来到账时间与在途款', () => {
     ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
-  it('托管单不允许一次性任务', async () => {
+  it('托管单现在允许一次性任务（2026-10-30 用户反馈）', async () => {
     const env = await freshEnv();
-    await expect(
-      seedHosting(env, [
-        {
-          ...CHECKBOX_DAILY,
-          title: '一次性任务',
-          recurrence: 'ONE_TIME',
-        },
-      ]),
-    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await seedHosting(env, [
+      {
+        ...CHECKBOX_DAILY,
+        title: '一次性任务',
+        recurrence: 'ONE_TIME',
+      },
+    ]);
+    const today = await env.services.queries.today({});
+    expect(today.hosting.map((item) => item.title)).toEqual(['一次性任务']);
+    expect(today.hosting[0].singleShot).toBe(true);
   });
 });

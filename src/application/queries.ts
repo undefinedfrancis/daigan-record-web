@@ -34,7 +34,13 @@ import {
 import { isCumulativeTask } from '../domain/derivedState';
 import { sortTasksByOrder } from '../domain/taskOrder';
 import { calendarGameDate, scopeCalendar, type ScopeCalendar } from '../domain/scopeCalendar';
-import { coverageSlotFor, parseWeekdays, slotFor } from '../domain/occurrences';
+import {
+  coverageSlotFor,
+  isSingleShotTask,
+  onceSlotKey,
+  parseWeekdays,
+  slotFor,
+} from '../domain/occurrences';
 import {
   hasObservationInScope,
   reachedTarget,
@@ -565,6 +571,53 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
                 calendar,
               });
             }
+            // 托管「一次性」任务：本期做一次即可，完成前每天都出现在今日事项里，
+            // 归属日就是实际打卡那一天（`O:` 键，不占轮次、也不算应做集）。
+            for (const task of periodTasks) {
+              if (task.retiredAt !== null) continue;
+              if (!isSingleShotTask(task)) continue;
+              if (occurrences.some((row) => row.taskDefinitionId === task.id && row.completedAt !== null)) {
+                continue;
+              }
+              const key = onceSlotKey(periodToday);
+              const occurrence =
+                occurrences.find(
+                  (row) => row.taskDefinitionId === task.id && row.occurrenceKey === key,
+                ) ?? null;
+              hosting.push({
+                ...base,
+                taskId: task.id,
+                colorTag: colorMarks.get(task.id) ?? null,
+                periodId: period.id,
+                occurrenceId: occurrence?.id ?? null,
+                occurrenceKey: key,
+                title: task.title,
+                progressType: task.progressType,
+                currentValue: occurrence?.value ?? task.currentValue,
+                targetValue: task.targetValue,
+                unit: task.unit,
+                completed: Boolean(occurrence?.completedAt),
+                backfilled: occurrence?.backfilled === 1,
+                windowStart: null,
+                windowEnd: null,
+                attachmentCount: occurrence
+                  ? (attachmentByOccurrence.get(occurrence.id) ?? 0)
+                  : (attachmentByTask.get(task.id) ?? 0),
+                batchId: occurrence?.completionBatchId ?? null,
+                serviceCount: period.serviceCount,
+                serviceRounds,
+                numericMode: task.numericMode,
+                cumulative: false,
+                reachedTarget: Boolean(occurrence?.completedAt),
+                sessionId: null,
+                sessionIndex: null,
+                awaitingSession: false,
+                roundDate: null,
+                gameDate: periodToday,
+                calendar,
+                singleShot: true,
+              });
+            }
             continue;
           }
 
@@ -595,6 +648,16 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
           const events = eventsOfOrder(data, taskIds);
           for (const task of periodTasks) {
             if (task.retiredAt !== null) continue;
+            const singleShot = isSingleShotTask(task);
+            // 一次性任务本期只做一次：完成即从今日事项消失（历史在打卡日历里可撤销）。
+            if (
+              singleShot &&
+              occurrences.some(
+                (row) => row.taskDefinitionId === task.id && row.completedAt !== null,
+              )
+            ) {
+              continue;
+            }
             const cumulative = isCumulativeTask(task);
             // 累计目标不受原重复触发日限制（UF-038）：达标前每天都可以更新。
             const slot = cumulative ? null : slotFor(task, period, today);
@@ -694,6 +757,7 @@ export function createQueryServices({ runtime, now }: QueryDeps) {
               roundDate: cumulative ? periodToday : today,
               gameDate: cumulative ? periodToday : today,
               calendar,
+              singleShot,
             });
           }
         }
@@ -1481,6 +1545,33 @@ function buildCalendar(input: {
                 (event) => event.taskDefinitionId === task.id && event.gameDate === cursor,
               ).length,
               attributedDate: cursor,
+              inWindow: false,
+            },
+          ];
+        }
+        if (isSingleShotTask(task)) {
+          // 一次性任务没有排期：只把真正记过的那一天画出来（点它可撤销/更正）。
+          const occurrence =
+            occurrences.find(
+              (row) =>
+                row.taskDefinitionId === task.id && row.occurrenceKey === onceSlotKey(cursor),
+            ) ?? null;
+          if (!occurrence) return [];
+          return [
+            {
+              taskId: task.id,
+              title: task.title,
+              occurrenceId: occurrence.id,
+              completed: occurrence.completedAt !== null,
+              backfilled: occurrence.backfilled === 1,
+              value: occurrence.value,
+              attachmentCount: data.attachments.filter(
+                (row) => row.occurrenceId === occurrence.id,
+              ).length,
+              cumulative: false,
+              reachedTarget: occurrence.completedAt !== null,
+              eventCount: 0,
+              attributedDate: occurrence.gameDate,
               inWindow: false,
             },
           ];

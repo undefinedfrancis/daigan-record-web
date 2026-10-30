@@ -54,6 +54,54 @@ function withinPeriod(period: HostingPeriodRow, date: string): boolean {
   return date >= period.startDate && date <= periodScheduleEnd(period);
 }
 
+/**
+ * 托管单「一次性」任务的打卡键前缀。
+ *
+ * 与 `N:`（计次轮次）刻意分开：一次性任务不占轮次号、不参与应做集，
+ * 归属日就是**实际打卡那一天**，因此键里带日期而不是轮次号。
+ */
+export const ONCE_SLOT_PREFIX = 'O:';
+
+/**
+ * 普通一次性任务（非累计口径）。
+ *
+ * 托管单允许它存在：本期只做一次，哪天打卡都算，完成后从今日事项消失，
+ * 既不计入每日应做集，也不拖累整轮/整单完成。
+ * 累计口径的 `ONE_TIME` 任务仍走事件链（`task_progress_events`），不产生打卡行。
+ */
+export function isSingleShotTask(
+  task: Pick<TaskDefinitionRow, 'recurrence' | 'progressType' | 'numericMode'>,
+): boolean {
+  if (task.recurrence !== 'ONE_TIME') return false;
+  return !(task.progressType === 'NUMERIC' && task.numericMode === 'CUMULATIVE');
+}
+
+export function onceSlotKey(gameDate: string): string {
+  return `${ONCE_SLOT_PREFIX}${gameDate}`;
+}
+
+/**
+ * 一次性任务的打卡槽：归属日 = 传入的游戏日（也就是实际打卡日）。
+ *
+ * 与 `slotFor` 一样遵守期次范围、任务生效起止日期与服务星期限制，
+ * 但不绑定任何轮次，也不产生"每天一条"的重复槽。
+ */
+export function onceSlotFor(
+  task: TaskDefinitionRow,
+  period: HostingPeriodRow,
+  gameDate: string,
+): OccurrenceSlot | null {
+  if (!withinPeriod(period, gameDate)) return null;
+  if (!withinTaskActiveRange(task, gameDate)) return null;
+  if (period.serviceDays != null) {
+    const serviceWeekdays = parseWeekdays(period.serviceWeekdays);
+    if (serviceWeekdays.length > 0 && !serviceWeekdays.includes(isoWeekday(gameDate))) {
+      return null;
+    }
+  }
+  return { key: onceSlotKey(gameDate), gameDate, windowStart: null, windowEnd: null };
+}
+
 /** 调度口径的期次结束日：按次数期次无日历期限，按开区间处理。 */
 export function periodScheduleEnd(period: HostingPeriodRow): string {
   return period.serviceCount != null ? '9999-12-31' : period.endDate;
@@ -176,6 +224,7 @@ export function slotFor(
   }
   // 按次数模式：不指定时间，每个游戏日都是完整一轮，全部托管任务都需打卡。
   if (period.serviceCount != null) {
+    // 一次性任务不属于任何轮次（应做集/轮次完成都不看它），它用自己的 `onceSlotFor`。
     if (task.recurrence === 'ONE_TIME') return null;
     return { key: `C:${gameDate}`, gameDate, windowStart: null, windowEnd: null };
   }
@@ -216,6 +265,9 @@ export function slotFor(
       };
     }
     case 'ONE_TIME':
+      // 托管「一次性」任务：本期只做一次，槽落在实际打卡日（`O:` 键，不占轮次）；
+      // 累计口径的一次性任务由事件链判定，这里不给槽。
+      return isSingleShotTask(task) ? onceSlotFor(task, period, gameDate) : null;
     default:
       return null;
   }

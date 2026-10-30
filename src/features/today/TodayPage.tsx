@@ -107,6 +107,11 @@ function TaskRow({
           {item.sessionIndex !== null ? (
             <span className="ml-1 text-[11px] text-ink-soft">第 {item.sessionIndex} 次</span>
           ) : null}
+          {item.singleShot ? (
+            <span className="ml-1 text-[11px] text-ink-soft" title="本期只做一次，哪天打卡都算">
+              本期一次
+            </span>
+          ) : null}
         </span>
       </label>
 

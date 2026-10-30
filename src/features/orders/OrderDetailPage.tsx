@@ -859,8 +859,8 @@ export function OrderDetailPage({ orderId }: { orderId: string }) {
                   </span>
                 </span>
                 <span className="flex items-center gap-2">
-                  {order.type === 'HOSTING' && task.recurrence === 'ONE_TIME' ? (
-                    <Badge tone="danger">托管不支持一次性，请编辑修改</Badge>
+                  {order.type === 'HOSTING' && task.recurrence === 'ONE_TIME' && !task.cumulative ? (
+                    <Badge>本期一次</Badge>
                   ) : null}
                   {task.cumulative ? <Badge>累计</Badge> : null}
                   {task.progressType === 'NUMERIC' ? (

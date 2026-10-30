@@ -19,14 +19,11 @@ export function TaskDraftRow({
   task,
   onChange,
   onRemove,
-  allowOneTime = true,
   sortControl,
 }: {
   task: TaskDraftItem;
   onChange: (patch: Partial<TaskDraftItem>) => void;
   onRemove: () => void;
-  /** 托管单不允许"一次性"任务（备份契约禁止）；存量脏数据仍保留可见并提示修改。 */
-  allowOneTime?: boolean;
   /** 排序控件（拖动 + 上/下移）；提交顺序即 sortOrder，保存后今日事项同步。 */
   sortControl?: SortableItemControl;
 }) {
@@ -105,18 +102,11 @@ export function TaskDraftRow({
             });
           }}
         >
-          {Object.entries(RECURRENCE_LABELS)
-            .filter(([value]) => allowOneTime || value !== 'ONE_TIME')
-            .map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          {!allowOneTime && task.recurrence === 'ONE_TIME' ? (
-            <option value="ONE_TIME" disabled>
-              一次性（托管单不支持，请改）
+          {Object.entries(RECURRENCE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
             </option>
-          ) : null}
+          ))}
         </Select>
         {sortControl ? (
           <>
@@ -160,6 +150,13 @@ export function TaskDraftRow({
             onChange={(event) => onChange({ activeUntil: event.target.value || null })}
           />
         </label>
+        {task.recurrence === 'ONE_TIME' ? (
+          <p className="w-full text-xs text-ink-soft">
+            一次性：<strong>只做一次</strong>。托管单里表示<strong>本期做一次即可</strong>
+            （哪天打卡都算，完成后从今日事项消失，也不算每日应做）。 注意：安卓端暂不支持这类任务，
+            含它的备份在安卓导入会被拒绝。
+          </p>
+        ) : null}
         {task.progressType === 'NUMERIC' ? (
           <>
             {task.numericMode === 'CUMULATIVE' ? (
