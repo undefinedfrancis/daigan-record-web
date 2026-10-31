@@ -909,6 +909,8 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           .filter((row) => row.orderId === order.id)
           .sort((left, right) => left.periodIndex - right.periodIndex);
         const periodIds = new Set(periods.map((row) => row.id));
+        const deletedIds = new Set(input.deletedPeriodIds ?? []);
+        const keptPeriods = periods.filter((row) => !deletedIds.has(row.id));
         const existingTasks = ctx.data.task_definitions.filter((row) => row.orderId === order.id);
         const existingById = new Map(existingTasks.map((row) => [row.id, row]));
 
@@ -923,13 +925,53 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
             : order.monthlyRefreshDays,
         );
         if (order.type === 'HOSTING') {
-          if (input.periods.length !== periods.length) {
+          for (const id of deletedIds) {
+            if (!periodIds.has(id)) throw new AppError('NOT_FOUND', '期次不属于该订单');
+          }
+          if (keptPeriods.length === 0) {
+            throw new AppError('INVALID_INPUT', '托管订单至少要保留一期，不能删除全部期次');
+          }
+          // 只允许删除尾部期次：中间删期会让期号与日期区间出现空洞，且无法再推算续期起点。
+          const lastKeptIndex = keptPeriods[keptPeriods.length - 1].periodIndex;
+          for (const period of periods) {
+            if (deletedIds.has(period.id) && period.periodIndex < lastKeptIndex) {
+              throw new AppError(
+                'INVALID_INPUT',
+                `第 ${period.periodIndex + 1} 期不是最后一期：请先删除它之后的期次`,
+              );
+            }
+          }
+          if (input.periods.length !== keptPeriods.length) {
             throw new AppError('INVALID_INPUT', '托管期次清单与订单不一致');
           }
           for (const item of input.periods) {
-            if (!periodIds.has(item.periodId)) throw new AppError('NOT_FOUND', '期次不属于该订单');
+            if (!periodIds.has(item.periodId) || deletedIds.has(item.periodId)) {
+              throw new AppError('NOT_FOUND', '期次不属于该订单');
+            }
           }
-        } else if (input.periods.length > 0) {
+          if (new Set(input.periods.map((item) => item.periodId)).size !== input.periods.length) {
+            throw new AppError('INVALID_INPUT', '期次清单不能重复');
+          }
+          // 删除期次守卫：收款、打卡轮次、改价审计都是历史，任一存在即拒绝整行删除。
+          // 任务级记录（打卡/截图/累计事件/批次）由下面的 assertTaskDeletable 统一拦截。
+          for (const period of periods) {
+            if (!deletedIds.has(period.id)) continue;
+            const label = `第 ${period.periodIndex + 1} 期`;
+            if (ctx.data.receipts.some((row) => row.periodId === period.id)) {
+              // 收款流水（含已作废/已更正）是财务历史：删期会让流水指向不存在的期次。
+              throw new AppError(
+                'CONFLICT',
+                `${label}已有收款流水（含作废/更正记录），不能删除期次；请保留该期或作废整单`,
+              );
+            }
+            if (ctx.data.hosting_sessions.some((row) => row.periodId === period.id)) {
+              throw new AppError('CONFLICT', `${label}已有打卡轮次，不能删除期次`);
+            }
+            if (ctx.data.order_price_changes.some((row) => row.periodId === period.id)) {
+              throw new AppError('CONFLICT', `${label}已有改价记录，不能删除期次`);
+            }
+          }
+        } else if (input.periods.length > 0 || deletedIds.size > 0) {
           throw new AppError('INVALID_INPUT', '短期单没有期次');
         }
 
@@ -938,6 +980,9 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           if (order.type === 'HOSTING') {
             if (!item.periodId || !periodIds.has(item.periodId)) {
               throw new AppError('INVALID_INPUT', '托管任务必须挂有效期次');
+            }
+            if (deletedIds.has(item.periodId)) {
+              throw new AppError('INVALID_INPUT', '已标记删除的期次不能保留任务，请一并移除该期任务');
             }
           } else if (item.periodId !== null) {
             throw new AppError('INVALID_INPUT', '短期单任务不能挂期次');
@@ -970,7 +1015,7 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
 
         // 期次解析（UF-010：工作日累计模式结束日按工作日推算；按次数模式无日历期限）
         const periodInputs = new Map(input.periods.map((item) => [item.periodId, item]));
-        const resolvedPeriods = periods.map((period) => {
+        const resolvedPeriods = keptPeriods.map((period) => {
           const item = periodInputs.get(period.id);
           if (!item) throw new AppError('INVALID_INPUT', '托管期次清单与订单不一致');
           const nextServiceDays = item.serviceDays !== undefined ? item.serviceDays : period.serviceDays;
@@ -1115,6 +1160,14 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
           }
         }
 
+        // 落库：整行删除被撤销的期次（其任务由下面的"未列出任务"分支清理）。
+        // 只删到期的尾部期次，因此保留期次的 periodIndex 仍是连续前缀，无需重排。
+        for (const period of periods) {
+          if (!deletedIds.has(period.id)) continue;
+          await ctx.table('hosting_periods').delete(period.id);
+          scheduleDirty = true;
+        }
+
         // 落库：订单基本字段（改价写审计）
         if (order.type === 'SHORT_TASK' && priceCents !== null && priceCents !== (order.priceCents ?? 0)) {
           await ctx.table('order_price_changes').add({
@@ -1209,8 +1262,9 @@ export function createOrderServices({ runtime, newId, now }: OrderDeps) {
         }
 
         // 重建打卡项（托管单；有记录/截图的历史行保留）
+        // 已删除的期次连同其任务一起消失，不能再用旧期次快照补排期。
         if (order.type === 'HOSTING' && (tasksDirty || scheduleDirty || refreshChanged)) {
-          for (const period of periods) {
+          for (const period of keptPeriods) {
             await syncTaskOccurrences(
               ctx,
               updatedPeriods.get(period.id) ?? period,

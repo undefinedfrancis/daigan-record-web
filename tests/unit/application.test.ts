@@ -109,6 +109,22 @@ function taskDraft(title: string): TemplateTaskDraft {
   };
 }
 
+/** 全量修改命令的公共字段：期次与任务清单由各用例单独给。 */
+function updateBase(orderId: string, command: CreateOrderCommand) {
+  return {
+    orderId,
+    title: command.title,
+    notes: null,
+    paymentMode: 'INSTALLMENTS' as const,
+    gameZoneId: 'Asia/Shanghai',
+    dailyRefreshMinutes: 300,
+    weeklyRefreshDay: 1,
+    weeklyRefreshMinutes: 300,
+    priceCents: null,
+    deadlineDate: null,
+  };
+}
+
 describe('本地资料与业务命令', () => {
   beforeEach(async () => {
     resetControlDb();
@@ -683,6 +699,211 @@ describe('本地资料与业务命令', () => {
     expect(after?.periods[0].endDate).toBe('2026-03-05');
     const day = after?.calendar.find((item) => item.gameDate === '2026-02-10');
     expect(day?.tasks[0]?.completed).toBe(true);
+  });
+
+  it('全量修改可删除误续期的尾部期次，连带清掉该期任务与空排期', async () => {
+    const env = await freshEnv();
+    const { orderId, command } = await seedOrder(env);
+    const before = (await env.services.queries.orderDetail(orderId))!;
+    const periodId = before.periods[0].id;
+    const taskId = before.tasks[0].id;
+    const renewalPeriodId = await env.services.orders.renew(
+      { operationId: 'renew-1', orderId, durationDays: 30, priceCents: 30000 },
+      env.token,
+    );
+    const withRenewal = (await env.services.queries.orderDetail(orderId))!;
+    expect(withRenewal.periods).toHaveLength(2);
+    const renewalTaskIds = withRenewal.tasks
+      .filter((task) => task.periodId === renewalPeriodId)
+      .map((task) => task.id);
+    expect(renewalTaskIds).toHaveLength(1);
+
+    await env.services.orders.update(
+      {
+        ...updateBase(orderId, command),
+        periods: [
+          { periodId, startDate: '2026-02-01', endDate: '2026-02-28', priceCents: 30000, serviceDays: null },
+        ],
+        deletedPeriodIds: [renewalPeriodId],
+        tasks: [{ id: taskId, periodId, task: command.tasks[0] }],
+      },
+      env.token,
+    );
+
+    const after = (await env.services.queries.orderDetail(orderId))!;
+    expect(after.periods.map((period) => period.id)).toEqual([periodId]);
+    expect(after.tasks.map((task) => task.id)).toEqual([taskId]);
+    // 今日事项回到单条任务：续期克隆的任务与其排期都不再存在。
+    const today = await env.services.queries.today({});
+    expect(today.hosting.some((item) => renewalTaskIds.includes(item.taskId))).toBe(false);
+    expect(today.hosting.filter((item) => item.taskId === taskId)).toHaveLength(1);
+
+    const snapshot = await env.services.exportSnapshot();
+    const data = snapshot.data as unknown as {
+      hosting_periods: { id: string }[];
+      task_definitions: { id: string }[];
+      task_occurrences: { taskDefinitionId: string }[];
+    };
+    expect(data.hosting_periods.map((row) => row.id)).toEqual([periodId]);
+    expect(data.task_definitions.some((row) => renewalTaskIds.includes(row.id))).toBe(false);
+    expect(
+      data.task_occurrences.every((row) => !renewalTaskIds.includes(row.taskDefinitionId)),
+    ).toBe(true);
+  });
+
+  it('期次已有收款或打卡记录时拒绝删除该期', async () => {
+    const env = await freshEnv();
+    const { orderId, command } = await seedOrder(env);
+    const before = (await env.services.queries.orderDetail(orderId))!;
+    const periodId = before.periods[0].id;
+    const taskId = before.tasks[0].id;
+    const renewalPeriodId = await env.services.orders.renew(
+      { operationId: 'renew-2', orderId, durationDays: 30, priceCents: 30000 },
+      env.token,
+    );
+    const command1 = {
+      ...updateBase(orderId, command),
+      periods: [
+        { periodId, startDate: '2026-02-01', endDate: '2026-02-28', priceCents: 30000, serviceDays: null },
+      ],
+      deletedPeriodIds: [renewalPeriodId],
+    };
+
+    // 收款：整期不能整行删除，历史流水不能被悬空。
+    await env.services.receipts.record(
+      {
+        operationId: 'renew-receipt',
+        orderId,
+        periodId: renewalPeriodId,
+        amountCents: 1000,
+        receivedAt: NOW,
+        channel: 'WECHAT',
+        note: null,
+      },
+      env.token,
+    );
+    await expect(
+      env.services.orders.update(
+        { ...command1, tasks: [{ id: taskId, periodId, task: command.tasks[0] }] },
+        env.token,
+      ),
+    ).rejects.toThrow(/收款流水/);
+  });
+
+  it('续期期次已有改价审计时拒绝删除该期', async () => {
+    const env = await freshEnv();
+    const { orderId, command } = await seedOrder(env);
+    const before = (await env.services.queries.orderDetail(orderId))!;
+    const periodId = before.periods[0].id;
+    const taskId = before.tasks[0].id;
+    const renewalPeriodId = await env.services.orders.renew(
+      { operationId: 'renew-3', orderId, durationDays: 30, priceCents: 30000 },
+      env.token,
+    );
+    await env.services.orders.changePrice(
+      { orderId, periodId: renewalPeriodId, priceCents: 32000 },
+      env.token,
+    );
+
+    // 改价审计引用期次 id：整行删除会让审计悬空。
+    await expect(
+      env.services.orders.update(
+        {
+          ...updateBase(orderId, command),
+          periods: [
+            { periodId, startDate: '2026-02-01', endDate: '2026-02-28', priceCents: 30000, serviceDays: null },
+          ],
+          deletedPeriodIds: [renewalPeriodId],
+          tasks: [{ id: taskId, periodId, task: command.tasks[0] }],
+        },
+        env.token,
+      ),
+    ).rejects.toThrow(/改价记录/);
+  });
+
+  it('只能删除尾部期次，且不能删光全部期次', async () => {
+    const env = await freshEnv();
+    const { orderId, command } = await seedOrder(env);
+    const before = (await env.services.queries.orderDetail(orderId))!;
+    const first = before.periods[0];
+    const second = await env.services.orders.renew(
+      { operationId: 'renew-4a', orderId, durationDays: 30, priceCents: 30000 },
+      env.token,
+    );
+    const third = await env.services.orders.renew(
+      { operationId: 'renew-4b', orderId, durationDays: 30, priceCents: 30000 },
+      env.token,
+    );
+    const base = updateBase(orderId, command);
+
+    // 中间期次（第 1 期）不能单独删除，否则期号与日期区间出现空洞。
+    await expect(
+      env.services.orders.update(
+        {
+          ...base,
+          periods: [],
+          deletedPeriodIds: [first.id],
+          tasks: [],
+        },
+        env.token,
+      ),
+    ).rejects.toThrow(/不是最后一期|至少要保留一期/);
+
+    // 删光全部期次被拒。
+    await expect(
+      env.services.orders.update(
+        {
+          ...base,
+          periods: [],
+          deletedPeriodIds: [first.id, second, third],
+          tasks: [],
+        },
+        env.token,
+      ),
+    ).rejects.toThrow(/至少要保留一期/);
+  });
+
+  it('未标记删除的期次必须仍在清单里，短期单不能声明删除期次', async () => {
+    const env = await freshEnv();
+    const { orderId, command } = await seedOrder(env);
+    const before = (await env.services.queries.orderDetail(orderId))!;
+    const periodId = before.periods[0].id;
+    const taskId = before.tasks[0].id;
+
+    // 期次清单少了一期却没声明删除 → 仍然拒绝（防止静默丢期）。
+    await expect(
+      env.services.orders.update(
+        {
+          ...updateBase(orderId, command),
+          periods: [],
+          tasks: [{ id: taskId, periodId, task: command.tasks[0] }],
+        },
+        env.token,
+      ),
+    ).rejects.toThrow(/不一致/);
+
+    const short = await seedOrder(env, {
+      operationId: 'op-short-1',
+      type: 'SHORT_TASK',
+      startDate: null,
+      endDate: null,
+      periodPriceCents: null,
+      priceCents: 10000,
+      deadlineDate: null,
+      firstReceipt: null,
+    });
+    await expect(
+      env.services.orders.update(
+        {
+          ...updateBase(short.orderId, short.command),
+          priceCents: 10000,
+          periods: [],
+          deletedPeriodIds: ['whatever'],
+          tasks: [],
+        },
+        env.token,
+      ),
+    ).rejects.toThrow(/短期单没有期次/);
   });
 
   it('订单颜色标记可设置、清除并随查询返回', async () => {

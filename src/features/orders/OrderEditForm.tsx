@@ -7,7 +7,14 @@ import {
   TextArea,
   TextInput,
 } from '../../components/ui';
-import { IconClipboard, IconList, IconPlus, IconSettings, IconWallet } from '../../components/icons';
+import {
+  IconClipboard,
+  IconList,
+  IconPlus,
+  IconSettings,
+  IconTrash,
+  IconWallet,
+} from '../../components/icons';
 import { MonthDayInputs } from '../../components/MonthDayInputs';
 import { SortableList } from '../../components/SortableList';
 import { toAppError } from '../../contracts/errors';
@@ -133,6 +140,15 @@ export function OrderEditForm({
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 误续期撤销：标记整期删除，保存时才落库（可随时撤销标记）。
+  const [removedPeriodIds, setRemovedPeriodIds] = useState<string[]>([]);
+  const [confirmPeriodId, setConfirmPeriodId] = useState<string | null>(null);
+  const removed = new Set(removedPeriodIds);
+  const visiblePeriods = periodStates.filter((period) => !removed.has(period.id));
+  // 任务分组保留全量：撤销删除标记时不用重建，只是不参与渲染与提交。
+  const visibleGroups = taskGroups.filter(
+    (group) => group.periodId === null || !removed.has(group.periodId),
+  );
 
   function updatePeriod(periodId: string, patch: Partial<PeriodEditState>) {
     setPeriodStates((current) =>
@@ -154,6 +170,7 @@ export function OrderEditForm({
       if (hosting && refreshCycle === 'monthly' && !monthlyRefreshDays) {
         throw new Error('请至少填写一个每月刷新日');
       }
+      if (hosting && visiblePeriods.length === 0) throw new Error('托管订单至少保留一期');
       const command: UpdateOrderCommand = {
         orderId: detail.order.id,
         title: title.trim(),
@@ -166,7 +183,7 @@ export function OrderEditForm({
         monthlyRefreshDays: hosting && refreshCycle === 'monthly' ? monthlyRefreshDays : null,
         priceCents: hosting ? null : parseMoney(shortPrice),
         deadlineDate: hosting ? null : deadline || null,
-        periods: periodStates.map((item) => ({
+        periods: visiblePeriods.map((item) => ({
           periodId: item.id,
           startDate: item.startDate,
           endDate: item.endDate,
@@ -174,7 +191,8 @@ export function OrderEditForm({
           serviceDays: item.serviceMode === 'weekdays' ? Number(item.serviceDaysText) : null,
           serviceCount: item.serviceMode === 'count' ? Number(item.serviceCountText) : null,
         })),
-        tasks: taskGroups.flatMap((group) =>
+        deletedPeriodIds: removedPeriodIds,
+        tasks: visibleGroups.flatMap((group) =>
           group.items.map((item) => ({
             id: item.id,
             periodId: item.periodId,
@@ -252,112 +270,168 @@ export function OrderEditForm({
           <IconWallet size={16} className="text-ink-soft" />
         </h3>
         {hosting ? (
-          periodStates.map((period) => {
-            const days = Number(period.serviceDaysText);
-            // 预览与命令层同源：用该期次真实的星期集合，缺省才退回周一至周五。
-            const weekdays = parseWeekdays(period.serviceWeekdays);
-            const weekdaySet = new Set(weekdays.length > 0 ? weekdays : [1, 2, 3, 4, 5]);
-            const previewEnd =
-              period.serviceMode === 'weekdays' &&
-              Number.isInteger(days) &&
-              days >= 1 &&
-              period.startDate
-                ? (() => {
-                    try {
-                      return hostingEndDateForWeekdays(period.startDate, days, weekdaySet);
-                    } catch {
-                      return null;
-                    }
-                  })()
-                : null;
-            return (
-              <div key={period.id} className="rounded-2xl border border-line/80 bg-white/75 p-3.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-medium">第 {period.periodIndex + 1} 期</p>
-                  <span className="text-xs text-ink-soft">
-                    已收 ¥{formatMoney(period.paidCents)}
-                  </span>
-                </div>
-                <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                  <Field label="服务模式">
-                    <Select
-                      value={period.serviceMode}
-                      onChange={(event) =>
-                        updatePeriod(period.id, {
-                          serviceMode: event.target.value as 'dates' | 'weekdays' | 'count',
-                        })
+          <>
+            {visiblePeriods.map((period, index) => {
+              const days = Number(period.serviceDaysText);
+              const periodTaskCount =
+                taskGroups.find((group) => group.periodId === period.id)?.items.length ?? 0;
+              // 预览与命令层同源：用该期次真实的星期集合，缺省才退回周一至周五。
+              const weekdays = parseWeekdays(period.serviceWeekdays);
+              const weekdaySet = new Set(weekdays.length > 0 ? weekdays : [1, 2, 3, 4, 5]);
+              const previewEnd =
+                period.serviceMode === 'weekdays' &&
+                Number.isInteger(days) &&
+                days >= 1 &&
+                period.startDate
+                  ? (() => {
+                      try {
+                        return hostingEndDateForWeekdays(period.startDate, days, weekdaySet);
+                      } catch {
+                        return null;
                       }
-                    >
-                      <option value="dates">按日期期限</option>
-                      <option value="weekdays">按服务星期累计天数（仅服务日提供服务）</option>
-                      <option value="count">按次数（整轮打卡累计）</option>
-                    </Select>
-                  </Field>
-                  {period.serviceMode !== 'count' ? (
-                    <Field
-                      label="开始日期"
-                      hint="可填未来日期做预订单；开始前不生成今日任务，也不能提前打卡"
-                    >
-                      <TextInput
-                        type="date"
-                        value={period.startDate}
-                        onChange={(event) => updatePeriod(period.id, { startDate: event.target.value })}
-                      />
-                    </Field>
-                  ) : (
-                    <Field
-                      label="服务次数"
-                      hint="一个游戏日整轮打卡全部任务算 1 次，不限日历期限"
-                    >
-                      <TextInput
-                        value={period.serviceCountText}
-                        inputMode="numeric"
-                        onChange={(event) =>
-                          updatePeriod(period.id, { serviceCountText: event.target.value })
-                        }
-                      />
-                    </Field>
-                  )}
-                  {period.serviceMode === 'dates' ? (
-                    <Field label="结束日期" hint="首尾均含在服务期内">
-                      <TextInput
-                        type="date"
-                        value={period.endDate}
-                        onChange={(event) => updatePeriod(period.id, { endDate: event.target.value })}
-                      />
-                    </Field>
-                  ) : null}
-                  {period.serviceMode === 'weekdays' ? (
-                    <Field
-                      label="累计服务天数"
-                      hint={`只在 ${weekdayNames([...weekdaySet])} 提供服务；结束日按同一集合推算`}
-                    >
-                      <TextInput
-                        value={period.serviceDaysText}
-                        inputMode="numeric"
-                        onChange={(event) =>
-                          updatePeriod(period.id, { serviceDaysText: event.target.value })
-                        }
-                      />
-                      {previewEnd ? (
-                        <span className="mt-1 block text-xs text-ink-soft">
-                          预计 {period.startDate} 至 {previewEnd}（含首尾，服务日{' '}
-                          {weekdayNames([...weekdaySet])}）
-                        </span>
+                    })()
+                  : null;
+              return (
+                <div key={period.id} className="rounded-2xl border border-line/80 bg-white/75 p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium">第 {period.periodIndex + 1} 期</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-ink-soft">
+                        已收 ¥{formatMoney(period.paidCents)}
+                      </span>
+                      {/* 只允许删除尾部期次：应用层同样按此约束校验。 */}
+                      {index === visiblePeriods.length - 1 ? (
+                        <Button
+                          variant="ghost"
+                          disabled={visiblePeriods.length <= 1 || period.paidCents > 0}
+                          title={
+                            visiblePeriods.length <= 1
+                              ? '托管订单至少保留一期'
+                              : period.paidCents > 0
+                                ? '本期已有收款，不能删除'
+                                : '删除本期（连同该期任务）'
+                          }
+                          onClick={() => setConfirmPeriodId(period.id)}
+                        >
+                          <IconTrash size={16} /> 删除本期
+                        </Button>
                       ) : null}
-                    </Field>
+                    </div>
+                  </div>
+                  {confirmPeriodId === period.id ? (
+                    <div className="mt-2 rounded-xl border border-danger/30 bg-[#fbe4dc] px-3 py-2 text-sm">
+                      <p>
+                        将删除第 {period.periodIndex + 1} 期
+                        {periodTaskCount > 0 ? `及其 ${periodTaskCount} 个任务` : ''}，保存后生效。
+                        已有收款或打卡记录的期次无法删除。
+                      </p>
+                      <div className="mt-2 flex flex-wrap justify-end gap-2">
+                        <Button onClick={() => setConfirmPeriodId(null)}>取消</Button>
+                        <Button
+                          variant="danger"
+                          onClick={() => {
+                            setRemovedPeriodIds((current) =>
+                              current.includes(period.id) ? current : [...current, period.id],
+                            );
+                            setConfirmPeriodId(null);
+                          }}
+                        >
+                          确认删除
+                        </Button>
+                      </div>
+                    </div>
                   ) : null}
-                  <Field label="期次价格（元）" hint="不能低于该期已收金额">
-                    <TextInput
-                      value={period.priceText}
-                      inputMode="decimal"
-                      onChange={(event) => updatePeriod(period.id, { priceText: event.target.value })}
-                    />
-                  </Field>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                    <Field label="服务模式">
+                      <Select
+                        value={period.serviceMode}
+                        onChange={(event) =>
+                          updatePeriod(period.id, {
+                            serviceMode: event.target.value as 'dates' | 'weekdays' | 'count',
+                          })
+                        }
+                      >
+                        <option value="dates">按日期期限</option>
+                        <option value="weekdays">按服务星期累计天数（仅服务日提供服务）</option>
+                        <option value="count">按次数（整轮打卡累计）</option>
+                      </Select>
+                    </Field>
+                    {period.serviceMode !== 'count' ? (
+                      <Field
+                        label="开始日期"
+                        hint="可填未来日期做预订单；开始前不生成今日任务，也不能提前打卡"
+                      >
+                        <TextInput
+                          type="date"
+                          value={period.startDate}
+                          onChange={(event) => updatePeriod(period.id, { startDate: event.target.value })}
+                        />
+                      </Field>
+                    ) : (
+                      <Field
+                        label="服务次数"
+                        hint="一个游戏日整轮打卡全部任务算 1 次，不限日历期限"
+                      >
+                        <TextInput
+                          value={period.serviceCountText}
+                          inputMode="numeric"
+                          onChange={(event) =>
+                            updatePeriod(period.id, { serviceCountText: event.target.value })
+                          }
+                        />
+                      </Field>
+                    )}
+                    {period.serviceMode === 'dates' ? (
+                      <Field label="结束日期" hint="首尾均含在服务期内">
+                        <TextInput
+                          type="date"
+                          value={period.endDate}
+                          onChange={(event) => updatePeriod(period.id, { endDate: event.target.value })}
+                        />
+                      </Field>
+                    ) : null}
+                    {period.serviceMode === 'weekdays' ? (
+                      <Field
+                        label="累计服务天数"
+                        hint={`只在 ${weekdayNames([...weekdaySet])} 提供服务；结束日按同一集合推算`}
+                      >
+                        <TextInput
+                          value={period.serviceDaysText}
+                          inputMode="numeric"
+                          onChange={(event) =>
+                            updatePeriod(period.id, { serviceDaysText: event.target.value })
+                          }
+                        />
+                        {previewEnd ? (
+                          <span className="mt-1 block text-xs text-ink-soft">
+                            预计 {period.startDate} 至 {previewEnd}（含首尾，服务日{' '}
+                            {weekdayNames([...weekdaySet])}）
+                          </span>
+                        ) : null}
+                      </Field>
+                    ) : null}
+                    <Field label="期次价格（元）" hint="不能低于该期已收金额">
+                      <TextInput
+                        value={period.priceText}
+                        inputMode="decimal"
+                        onChange={(event) => updatePeriod(period.id, { priceText: event.target.value })}
+                      />
+                    </Field>
+                  </div>
                 </div>
+              );
+            })}
+            {removedPeriodIds.length > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-line bg-white/75 px-3.5 py-2.5 text-sm">
+                <span>
+                  已标记删除 {removedPeriodIds.length} 期（含该期任务），保存后生效。
+                </span>
+                <Button variant="ghost" onClick={() => setRemovedPeriodIds([])}>
+                  撤销删除
+                </Button>
               </div>
-            );
-          })
+            ) : null}
+          </>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="整单总价（元）" hint="不能低于已收金额">
@@ -384,7 +458,7 @@ export function OrderEditForm({
           任务
           <IconList size={16} className="text-ink-soft" />
         </h3>
-        {taskGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <div
             key={group.periodId ?? 'short'}
             className="rounded-2xl border border-line/80 bg-white/75 p-3.5"

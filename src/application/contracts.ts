@@ -230,8 +230,16 @@ export interface UpdateOrderCommand {
   priceCents: number | null;
   /** 短期单交付期限；托管单传 null。 */
   deadlineDate: string | null;
-  /** 托管期次全量清单（与订单期次一一对应）；短期单传空数组。 */
+  /**
+   * 托管**保留**期次清单（等于订单期次减去 `deletedPeriodIds`）；短期单传空数组。
+   * 期次只能整行删除，不能通过缩短日期或改模式来"消失"。
+   */
   periods: UpdateOrderPeriodInput[];
+  /**
+   * 要整行删除的期次 id（误续期撤销）。只允许删除**尾部**期次，且该期不得有
+   * 收款、打卡轮次、改价审计或带记录的派生任务；删除时其任务与空排期一并清理。
+   */
+  deletedPeriodIds?: string[];
   /** 任务全量清单；未列出的已有任务将被删除（有打卡/截图记录时拒绝删除）。 */
   tasks: UpdateOrderTaskItem[];
 }
